@@ -8,11 +8,6 @@
 **/*.dmp
 **/.thumbs
 
-# No USD files allowed in the repo
-**/*.usd
-**/*.usda
-**/*.usdc
-**/*.usdz
 
 # Python
 .DS_Store
@@ -80,8 +75,6 @@ _build
 # Ruff cache
 **/.ruff_cache/
 
-# Dev-time files, generated stuff
-**/__*
 
 # Isaac Lab CI environments in native mode
 **/_isaaclab_install_ci_*

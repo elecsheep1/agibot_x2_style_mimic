@@ -59,6 +59,13 @@ def main():
         # create environment
         env = gym.make(args_cli.task, cfg=env_cfg)
 
+        ''' 诊断修改开始 '''
+        robot = env.unwrapped.scene["robot"]
+        print("\n===== X2 bodies =====")
+        for index, name in enumerate(robot.body_names):
+            print(f"{index:2d}: {name}")
+        ''' 诊断修改结束 '''
+
         # print info (this is vectorized environment)
         print(f"[INFO]: Gym observation space: {env.observation_space}")
         print(f"[INFO]: Gym action space: {env.action_space}")
