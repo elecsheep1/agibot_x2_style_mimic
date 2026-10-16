@@ -1,10 +1,10 @@
-# Note: These files are kept for development purposes only.
+# Ignore generated local settings before declaring shared-file exceptions.
+.python.env
+*.json
+
+# Keep shared development configuration.
+!extensions.json
+!tasks.json
 !tools/launch.template.json
 !tools/settings.template.json
 !tools/setup_vscode.py
-!extensions.json
-!tasks.json
-
-# Ignore all other files
-.python.env
-*.json

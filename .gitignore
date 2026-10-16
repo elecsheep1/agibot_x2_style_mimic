@@ -1,83 +1,95 @@
-# C++
-**/cmake-build*/
-**/build*/
-**/*.so
-**/*.log*
+# Python caches and build products
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+cmake-build*/
+*.so
 
-# Omniverse
-**/*.dmp
-**/.thumbs
+# Local environments and credentials
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+.python.env
 
+# Training outputs, recordings, and experiment trackers
+logs/
+output/
+outputs/
+runs/
+wandb/
+.neptune/
+videos/
+recordings/
+tactile_record/
+gelsight_r15_data/
+*.log
+*.log.*
+*.tfevents.*
 
-# Python
-.DS_Store
-**/*.egg-info/
-**/__pycache__/
-**/.pytest_cache/
-**/*.pyc
-**/*.pb
-
-# Docker/Singularity
-**/*.sif
-docker/cluster/exports/
-docker/.container.cfg
-
-# IDE
-**/.idea/
-**/.vscode/
-# Don't ignore the top-level .vscode directory as it is
-# used to configure VS Code settings
-!.vscode
-
-# Outputs
-**/output/*
-**/outputs/*
-**/videos/*
-**/wandb/*
-**/.neptune/*
-docker/artifacts/
-*.tmp
-
-# Doc Outputs
-**/docs/_build/*
-**/generated/*
-
-# Isaac-Sim packman
-_isaac_sim*
-_repo
-_build
-.lastformat
-
-# RL-Games
-**/runs/*
-**/logs/*
-**/recordings/*
-
-# Pre-Trained Checkpoints
+# Local policies and datasets; intentionally published artifacts need explicit rules
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.jit
 /.pretrained_checkpoints/
-
-# Teleop Recorded Dataset
 /datasets/
+/benchmarks/results/
 
-# Tests
-/tests/
-
-# Docker history
+# Isaac Sim / Omniverse caches and conversion fingerprints
+*.dmp
+.thumbs/
+.asset_hash
+_isaac_sim*/
+_repo/
+_build/
+.lastformat
+_isaaclab_install_ci_*/
 .isaac-lab-docker-history
 
-# TacSL sensor
-**/tactile_record/*
-**/gelsight_r15_data/*
+# Container outputs
+*.sif
+docker/cluster/exports/
+docker/.container.cfg
+docker/artifacts/
 
-# No benchmarks output
-/benchmarks/
+# Documentation output; keep documentation source and tests versioned
+docs/_build/
+generated/
 
-# Ruff cache
-**/.ruff_cache/
+# Editor-local files; keep the project's shared VS Code configuration
+.idea/
+.vscode/*
+!.vscode/.gitignore
+!.vscode/extensions.json
+!.vscode/tasks.json
+!.vscode/tools/
+.vscode/tools/*
+!.vscode/tools/launch.template.json
+!.vscode/tools/settings.template.json
+!.vscode/tools/setup_vscode.py
 
+# OS / temporary files
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+*.swo
+*~
 
-# Isaac Lab CI environments in native mode
-**/_isaaclab_install_ci_*
-
-# Superpowers (Claude Code plugin artifacts)
+# Local assistant workflow artifacts
 docs/superpowers/
+
+# USD/USDA/USDC/USDZ and robot meshes are runtime assets.
+# Keep them versioned; use .gitattributes and Git LFS for large files.
+# Do not ignore __init__.py, __init__.pyi, tests/, or all __* names.
