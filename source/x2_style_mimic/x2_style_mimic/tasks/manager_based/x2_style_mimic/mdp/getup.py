@@ -1,0 +1,750 @@
+import json
+import math
+from pathlib import Path
+
+import numpy as np
+import torch
+
+from .motion_dataset import MotionDataset
+from isaaclab.managers import ManagerTermBase, SceneEntityCfg
+
+
+def _write_reference_state(
+        env,
+        env_ids,
+        robot,
+        root_pose,
+        root_velocity,
+        joint_pos,
+        joint_vel,
+    ):
+    """把参考状态写入物理仿真。"""
+    # 把根位姿、根速度和关节状态写入物理仿真。
+    robot.write_root_link_pose_to_sim_index(
+        root_pose=root_pose,
+        env_ids=env_ids,
+    )
+    robot.write_root_link_velocity_to_sim_index(
+        root_velocity=root_velocity,
+        env_ids=env_ids,
+    )
+    # 兼容此前发现的根速度写入问题：
+    # 保留根原点速度缓存，同时修正 PhysX 接收的质心速度。
+    offset_b = robot.data.body_com_pose_b.torch[
+        env_ids, 0, :3
+    ]
+    quaternion = root_pose[:, 3:7]
+
+    t = 2.0 * torch.cross(
+        quaternion[:, :3],
+        offset_b,
+        dim=-1,
+    )
+
+    offset_w = (
+        offset_b
+        + quaternion[:, 3:4] * t
+        + torch.cross(
+            quaternion[:, :3],
+            t,
+            dim=-1,
+        )
+    )
+
+    com_velocity = root_velocity.clone()
+    com_velocity[:, :3] += torch.cross(
+        root_velocity[:, 3:6],
+        offset_w,
+        dim=-1,
+    )
+
+    robot.write_root_com_velocity_to_sim_index(
+        root_velocity=com_velocity,
+        env_ids=env_ids,
+    )
+    robot.write_joint_state_to_sim_index(
+        position=joint_pos,
+        velocity=joint_vel,
+        env_ids=env_ids,
+    )
+
+    # 防止重置后、首个动作到来前使用上个 episode 的目标。
+    robot.set_joint_position_target_index(
+        target=joint_pos,
+        env_ids=env_ids,
+    )
+
+    # 当前 PhysX 后端写入根状态后，部分机身坐标系派生缓存
+    # 可能仍保留本控制步重置前的值。
+    # 使缓存失效，下次读取时根据新姿态和速度重新计算。
+    for buffer_name in (
+        "_projected_gravity_b",
+        "_root_link_lin_vel_b",
+        "_root_link_ang_vel_b",
+        "_root_com_lin_vel_b",
+        "_root_com_ang_vel_b",
+        "_heading_w",
+    ):
+        buffer = getattr(robot.data, buffer_name, None)
+        if buffer is not None:
+            buffer.timestamp = -1.0
+
+def reset_from_reference(
+    env,
+    env_ids,
+    motion_file,
+    random_frame_probability=0.0,
+    start_phase=0.0,
+    end_phase=0.95,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+):
+    """混合首帧初始化与随机参考帧初始化。"""
+
+    if not 0.0 <= random_frame_probability <= 1.0:
+        raise ValueError("random_frame_probability 必须在 [0, 1] 内")
+
+    if not 0.0 <= start_phase <= end_phase <= 1.0:
+        raise ValueError("参考采样范围必须满足0 <= start_phase <= end_phase <= 1")
+
+    # 根据配置名称从场景中取得机器人对象，默认名称为 "robot"。
+    robot = env.scene[asset_cfg.name]
+
+    # env_ids=None 表示重置全部并行环境。
+    if env_ids is None:
+        env_ids = torch.arange(env.num_envs, device=env.device)
+
+    # 没有待重置环境时直接返回，避免后续创建空张量。
+    if len(env_ids) == 0:
+        return
+
+    # 参考动作只需要读取一次，之后直接复用缓存在环境对象上的张量。
+    cache = getattr(env, "_getup_reference_cache", None)
+
+    if (cache is None or cache.get("motion_file") != str(motion_file)):
+        with np.load(motion_file, allow_pickle=False) as data:
+            # metadata_json 在 npz 中以字符串标量保存。
+            metadata = json.loads(str(data["metadata_json"].item()))
+
+            # Isaac Lab 此处写入的根姿态四元数要求顺序为 (x, y, z, w)。
+            if (metadata["quat_order"] != "xyzw" or metadata["root_frame"] != "pelvis"):
+                raise ValueError("参考坐标系不匹配")
+
+            source_names = data["joint_names"].tolist()
+
+            # 名称集合必须完全一致，否则无法安全地逐关节映射参考姿态。
+            if (len(source_names) != len(robot.joint_names) or set(source_names) != set(robot.joint_names)):
+                raise ValueError("The reference joints and the robot’s joint set are inconsistent.")
+
+            # 按实际 Isaac 关节顺序重排，包含头部两个关节。
+            indices = [
+                source_names.index(name)
+                for name in robot.joint_names
+            ]
+
+            # 读取完整片段，后面按帧编号选择初始化状态。
+            pose = np.concatenate(
+                (
+                    data["root_pos_w"],
+                    data["root_quat_xyzw"],
+                ),
+                axis=-1,
+            )
+
+            root_velocity_data = np.concatenate(
+                (
+                    data["root_lin_vel_w"],
+                    data["root_ang_vel_w"],
+                ),
+                axis=-1,
+            )
+
+            joint_pos = data["joint_pos"][:, indices].copy()
+            joint_vel_data = data["joint_vel"][:, indices].copy()
+
+        # 将 NumPy 数据转到仿真设备上，供所有并行环境重复使用。
+        cache = {
+            "root_pose": torch.tensor(
+                pose,
+                dtype=torch.float32,
+                device=env.device,
+            ),
+            "joint_pos": torch.tensor(
+                joint_pos,
+                dtype=torch.float32,
+                device=env.device,
+            ),
+            "root_velocity": torch.tensor(
+                root_velocity_data,
+                dtype=torch.float32,
+                device=env.device,
+            ),
+            "joint_vel": torch.tensor(
+                joint_vel_data,
+                dtype=torch.float32,
+                device=env.device,
+            ),
+            "motion_file": str(motion_file),
+
+        }
+
+        env._getup_reference_cache = cache
+
+    count = len(env_ids)
+
+    last = len(cache["root_pose"]) - 1
+    lower = int(start_phase * last)
+    upper = int(end_phase * last)
+
+    # 每个环境独立决定是否从随机参考帧出生。
+    random_start = (
+        torch.rand(count, device=env.device)
+        < random_frame_probability
+    )
+
+    frames = torch.randint(
+        lower,
+        upper + 1,
+        (count,),
+        device=env.device,
+    )
+
+    # 未选中随机初始化的环境使用第 0 帧。
+    frames = torch.where(
+        random_start,
+        frames,
+        torch.zeros_like(frames),
+    )
+
+    root_pose = cache["root_pose"][frames].clone()
+    root_pose[:, :3] += env.scene.env_origins[env_ids]
+    root_pose[:, 2] += 0.01
+
+    joint_pos = cache["joint_pos"][frames].clone()
+    root_velocity = cache["root_velocity"][frames].clone()
+    joint_vel = cache["joint_vel"][frames].clone()
+
+    # 固定首帧保持零速度，随机帧恢复对应参考速度。
+    root_velocity[~random_start] = 0.0
+    joint_vel[~random_start] = 0.0
+
+    # 保存出生帧，方便诊断。
+    if not hasattr(env, "_getup_reference_frame_ids"):
+        env._getup_reference_frame_ids = torch.zeros(
+            env.num_envs,
+            dtype=torch.long,
+            device=env.device,
+        )
+
+    env._getup_reference_frame_ids[env_ids] = frames
+
+    _write_reference_state(
+        env, env_ids, robot,
+        root_pose, root_velocity, joint_pos, joint_vel,
+    )
+
+def reset_from_motion_dataset(
+    env,
+    env_ids,
+    manifest_file,
+    policy_joint_names,
+    start_phase=0.0,
+    end_phase=0.0,
+    use_reference_velocity=False,
+    height_offset=0.01,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+):
+    """按权重选择动作；默认从首帧、零速度出生。"""
+    if not math.isfinite(height_offset) or height_offset < 0.0:
+        raise ValueError("height_offset 必须为非负有限数")
+
+    robot = env.scene[asset_cfg.name]
+
+    if env_ids is None:
+        env_ids = torch.arange(env.num_envs, device=env.device)
+    else:
+        env_ids = torch.as_tensor(env_ids, dtype=torch.long, device=env.device)
+
+    if env_ids.numel() == 0:
+        return
+
+    # 加载一次，后续重置复用。
+    key = (
+        str(Path(manifest_file).resolve()),
+        tuple(robot.joint_names),
+        tuple(policy_joint_names),
+        str(env.device),
+        float(env.step_dt),
+    )
+    cache = getattr(env, "_getup_motion_dataset_cache", None)
+
+    if cache is None or cache[0] != key:
+        dataset = MotionDataset(
+            manifest_file=manifest_file,
+            robot_joint_names=robot.joint_names,
+            policy_joint_names=policy_joint_names,
+            device=env.device,
+            step_dt=env.step_dt,
+        )
+        env._getup_motion_dataset_cache = (key, dataset)
+    else:
+        dataset = cache[1]
+
+    state = dataset.sample_reset_states(
+        len(env_ids),
+        start_phase,
+        end_phase,
+    )
+
+    root_pose = state["root_pose"].clone()
+    root_pose[:, :3] += env.scene.env_origins[env_ids]
+    root_pose[:, 2] += height_offset
+
+    root_velocity = state["root_velocity"].clone()
+    joint_pos = state["joint_pos"].clone()
+    joint_vel = state["joint_vel"].clone()
+
+    if not use_reference_velocity:
+        root_velocity.zero_()
+        joint_vel.zero_()
+
+    # 与当前仿真模型的硬限位对齐，并记录裁剪数量。
+    limits = robot.data.joint_pos_limits.torch[env_ids]
+    clamped = joint_pos.clamp(
+        min=limits[:, :, 0],
+        max=limits[:, :, 1],
+    )
+    clamp_count = ((clamped - joint_pos).abs() > 1e-6).sum(dim=-1)
+    joint_pos = clamped
+
+    velocity_limits = robot.data.joint_vel_limits.torch[env_ids]
+    joint_vel = joint_vel.clamp(
+        min=-velocity_limits,
+        max=velocity_limits,
+    )
+
+    # 保存每个环境的出生动作、帧号和裁剪数量。
+    for name in (
+        "_getup_reference_frame_ids",
+        "_getup_reference_motion_ids",
+        "_getup_reference_joint_clamp_counts",
+    ):
+        if not hasattr(env, name):
+            setattr(
+                env,
+                name,
+                torch.zeros(
+                    env.num_envs,
+                    dtype=torch.long,
+                    device=env.device,
+                ),
+            )
+
+    env._getup_reference_frame_ids[env_ids] = state["frame_ids"]
+    env._getup_reference_motion_ids[env_ids] = state["motion_ids"]
+    env._getup_reference_joint_clamp_counts[env_ids] = clamp_count
+    env._getup_reference_motion_paths = [
+        str(path) for path in dataset.paths
+    ]
+
+    _write_reference_state(
+        env,
+        env_ids,
+        robot,
+        root_pose,
+        root_velocity,
+        joint_pos,
+        joint_vel,
+    )
+
+def height_reward(
+    env,
+    minimum_height: float,
+    target_height: float,
+    inverted_cutoff: float = -0.2,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+):
+    """鼓励根高度接近站立高度，单位 m。"""
+    robot = env.scene[asset_cfg.name]
+
+    # 世界系根高度减去环境原点高度，得到每个环境中的相对高度 [num_envs]。
+    height = (
+        robot.data.root_pos_w.torch[:, 2]
+        - env.scene.env_origins[:, 2]
+    )
+
+    height_progress = (
+        (height - minimum_height)
+        / (target_height - minimum_height)
+    ).clamp(0.0, 1.0)
+
+    # 这是与世界竖直方向的点积，不是角度：
+    # 直立约为 +1，水平约为 0，倒置约为 -1。
+    upright = -robot.data.projected_gravity_b.torch[:, 2]
+
+    # 明显倒置时不给高度奖励。
+    # 水平附近仍保留少量反馈，帮助俯卧阶段探索。
+    orientation_gate = (
+        (upright - inverted_cutoff)
+        / (1.0 - inverted_cutoff)
+    ).clamp(0.0, 1.0)
+
+    return height_progress * orientation_gate
+
+def upright_reward(
+    env,
+    minimum_height: float,
+    full_height: float,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+):
+    """根坐标系竖直向上时为 1，水平或倒置时为 0。"""
+    robot = env.scene[asset_cfg.name]
+
+    height = (
+        robot.data.root_pos_w.torch[:, 2]
+        - env.scene.env_origins[:, 2]
+    )
+
+    height_gate = (
+        (height - minimum_height)
+        / (full_height - minimum_height)
+    ).clamp(0.0, 1.0)
+
+    upright = (
+        -robot.data.projected_gravity_b.torch[:, 2]
+    ).clamp(0.0, 1.0)
+
+    return height_gate * upright
+
+def rise_speed_penalty(
+    env,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+):
+    """身体抬离地面时，惩罚过大的线速度和角速度。"""
+    robot = env.scene[asset_cfg.name]
+
+    height = (
+        robot.data.root_pos_w.torch[:, 2]
+        - env.scene.env_origins[:, 2]
+    )
+
+    # 低于 0.25 m 不启用，到 0.40 m 完全启用。
+    height_gate = ((height - 0.25) / 0.15).clamp(0.0, 1.0)
+
+    upright_gate = (
+        -robot.data.projected_gravity_b.torch[:, 2]
+    ).clamp(0.0, 1.0)
+
+    linear_speed = robot.data.root_lin_vel_w.torch.norm(dim=-1)
+    angular_speed = robot.data.root_ang_vel_w.torch.norm(dim=-1)
+
+    # 允许正常起身运动，只惩罚超出范围的部分。
+    linear_excess = (linear_speed - 0.60).clamp_min(0.0)
+    angular_excess = (angular_speed - 1.50).clamp_min(0.0)
+
+    return height_gate * upright_gate * (
+        linear_excess.square()
+        + 0.10 * angular_excess.square()
+    )
+
+def ground_contact_force(
+    env,
+    sensor_cfg: SceneEntityCfg,
+):
+    """返回每个环境历史帧中的最大地面接触力，单位 N。"""
+    sensor = env.scene.sensors[sensor_cfg.name]
+    history = sensor.data.force_matrix_w_history
+
+    if history is None:
+        raise RuntimeError(f"{sensor_cfg.name} 缺少地面过滤接触力历史")
+
+    # [环境, 历史帧, 传感刚体, 过滤对象, xyz]
+    forces = history.torch
+
+    # 每个传感器只匹配一个刚体和一个地面。
+    if forces.shape[2:] != (1, 1, 3):
+        raise RuntimeError(f"{sensor_cfg.name} 匹配数量不正确：{forces.shape}")
+
+    return forces.norm(dim=-1).amax(dim=(1, 2, 3))
+
+def crouch_stability_reward(
+    env,
+    asset_cfg: SceneEntityCfg,
+    torso_cfg: SceneEntityCfg,
+    ground_sensor_cfgs: tuple[SceneEntityCfg, ...],
+    minimum_height: float = 0.42,
+    full_height: float = 0.50,
+    target_height: float = 0.53,
+    linear_speed_scale: float = 0.25,
+    angular_speed_scale: float = 0.60,
+    force_threshold: float = 5.0,
+):
+    """身体抬起后，连续奖励稳定的半蹲高度、姿态、速度和支撑。"""
+    robot = env.scene[asset_cfg.name]
+
+    height = (robot.data.root_pos_w.torch[:, 2] - env.scene.env_origins[:, 2])
+
+    height_gate = ((height - minimum_height) / (full_height - minimum_height)).clamp(0.0, 1.0)
+    # smoothstep 函数：平滑后的值 = x² × (3 - 2x)
+    height_gate = height_gate.square() * (3.0 - 2.0 * height_gate)
+
+    root_up = -robot.data.projected_gravity_b.torch[:, 2]
+    root_gate = ((root_up - 0.5) / 0.44).clamp(0.0, 1.0)
+    root_gate = root_gate.square() * (3.0 - 2.0 * root_gate)
+
+    torso_quat = robot.data.body_link_pose_w.torch[
+        :, torso_cfg.body_ids, 3:7
+    ]
+    # 1 - 2 * (x² + y²)算出的是躯干自身向上方向与世界竖直向上方向夹角的余弦
+    torso_up = (
+        1.0
+        - 2.0 * (
+            torso_quat[..., 0].square()
+            + torso_quat[..., 1].square()
+        )
+    ).amin(dim=-1)
+    # 骨盆和躯干姿态保持连续反馈。
+    # 用 1-cos(倾角) 衡量姿态误差，避免 acos 在接近直立时的数值问题。
+    root_pose_score = torch.exp(-4.0 * (1.0 - root_up.clamp(-1.0, 1.0)))
+    torso_pose_score = torch.exp(-8.0 * (1.0 - torso_up.clamp(-1.0, 1.0)))
+    posture_score = 0.5 * (
+        root_pose_score + torso_pose_score
+    )
+
+    # 只在双脚都有地面接触时鼓励稳定。
+    # 不要求左右脚承重相等。
+    feet_score = torch.stack(
+        [
+            ground_contact_force(env, cfg) > force_threshold
+            for cfg in ground_sensor_cfgs
+        ],
+        dim=-1
+    ).float().mean(dim=-1)
+
+    # 先平方再求和防止正负抵消
+    linear_speed_sq = robot.data.root_lin_vel_w.torch.square().sum(dim=-1)
+    angular_speed_sq = robot.data.root_ang_vel_w.torch.square().sum(dim=-1)
+
+    # 速度越小，奖励越高；这里不直接采用成功判定的硬阈值。
+    speed_score = torch.exp(
+        -linear_speed_sq / linear_speed_scale**2
+        -angular_speed_sq / angular_speed_scale**2
+    )
+
+    height_score = torch.exp(-((height - target_height) / 0.10).square())
+
+    knee_angles = robot.data.joint_pos.torch[:, asset_cfg.joint_ids]
+    knee_excess = (knee_angles.abs() - 1.50).clamp_min(0.0)
+    knee_score = torch.exp(
+        -knee_excess.square().sum(dim=-1) / 0.25**2
+    )
+
+    quality = (
+        0.15 * height_score
+        + 0.25 * posture_score
+        + 0.40 * speed_score
+        + 0.10 * feet_score
+        + 0.10 * knee_score
+    )
+
+    return height_gate * root_gate * quality
+
+
+def head_contact_penalty(
+    env,
+    force_threshold: float,
+    ground_sensor_cfgs: tuple[SceneEntityCfg, ...],
+):
+    """任一头部刚体发生明显接触时返回 1。"""
+    contact = torch.stack(
+        [
+            ground_contact_force(env, cfg) > force_threshold
+            for cfg in ground_sensor_cfgs
+        ],
+        dim=-1,
+    )
+
+    # 两个头部刚体同时接触也只计一次。
+    return contact.any(dim=-1).float()
+
+def success_reward(env):
+    """读取本步成功终止标志，不重复更新成功计时。"""
+    # 将布尔终止标志转换为浮点奖励：成功为 1，否则为 0。
+    return env.termination_manager.get_term("success").float()
+
+def out_of_bounds_failure(env):
+    """越界时触发一次；补偿奖励管理器的控制步长缩放。"""
+    return (
+        env.termination_manager.get_term("out_of_bounds").float()
+        / env.step_dt
+    )
+
+def out_of_bounds(
+    env,
+    max_distance: float,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+):
+    """机器人离开自己的实验区域时结束 episode。"""
+    robot = env.scene[asset_cfg.name]
+
+    # 根位置减去所属环境原点，得到机器人相对于自己出生区域的位置。
+    relative_position = (
+        robot.data.root_pos_w.torch
+        - env.scene.env_origins
+    )
+
+    # 只计算水平面 xy 距离；超过允许半径时返回 True。
+    return (
+        torch.linalg.vector_norm(
+            relative_position[:, :2],
+            dim=-1,
+        )
+        > max_distance
+    )
+
+
+class GetUpSuccess(ManagerTermBase):
+    """站立条件连续满足指定时长后，才判定成功。"""
+
+    def __init__(self, cfg, env):
+        super().__init__(cfg, env)
+
+        # 记录每个并行环境已连续满足站立条件的仿真步数。
+        self._hold_steps = torch.zeros(
+            env.num_envs,
+            dtype=torch.long,
+            device=env.device,
+        )
+        # 记录每个环境上次执行判定时的 episode 步数，防止同一步重复计数。
+        self._last_step = torch.full_like(
+            self._hold_steps,
+            -1,
+        )
+
+    def reset(self, env_ids=None):
+        # env_ids=None 时重置全部环境，否则只重置指定环境。
+        ids = slice(None) if env_ids is None else env_ids
+
+        self._hold_steps[ids] = 0
+        self._last_step[ids] = -1
+
+    def __call__(
+        self,
+        env,
+        minimum_height: float,
+        maximum_tilt: float,
+        maximum_linear_speed: float,
+        maximum_angular_speed: float,
+        maximum_knee_angle: float,
+        hold_time: float,
+        force_threshold: float,
+        asset_cfg: SceneEntityCfg,
+        ground_sensor_cfgs: tuple[SceneEntityCfg, ...],
+        maximum_torso_tilt: float = 0.55,
+        torso_cfg: SceneEntityCfg | None = None,
+    ):
+        robot = env.scene[asset_cfg.name]
+
+        # 每个机器人根节点相对于所属环境原点的高度，形状为 [num_envs]。
+        height = (
+            robot.data.root_pos_w.torch[:, 2]
+            - env.scene.env_origins[:, 2]
+        )
+
+        # 机身竖直方向与世界竖直方向夹角小于 maximum_tilt 时视为直立。
+        # 两个单位方向向量的点积等于夹角余弦；这里该点积为 -projected_gravity_z。
+        upright = (
+            -robot.data.projected_gravity_b.torch[:, 2]
+            > math.cos(maximum_tilt)
+        )
+
+        # 根节点直立不代表胸部也回正，因此单独检查躯干。
+        torso_upright = torch.ones_like(upright)
+
+        if torso_cfg is not None:
+            torso_quat = robot.data.body_link_pose_w.torch[
+                :, torso_cfg.body_ids, 3:7
+            ]
+            torso_up_cosine = (
+                1.0
+                - 2.0 * (
+                    torso_quat[..., 0].square()
+                    + torso_quat[..., 1].square()
+                )
+            )
+            torso_upright = (
+                torso_up_cosine > math.cos(maximum_torso_tilt)
+            ).all(dim=-1)
+
+        # 根节点三维线速度和三维角速度的 L2 范数，形状均为 [num_envs]。
+        linear_speed = torch.linalg.vector_norm(
+            robot.data.root_lin_vel_w.torch,
+            dim=-1,
+        )
+
+        angular_speed = torch.linalg.vector_norm(
+            robot.data.root_ang_vel_w.torch,
+            dim=-1,
+        )
+
+        # asset_cfg 在配置中只选择左右膝关节。
+        knee_angles = robot.data.joint_pos.torch[
+            :, asset_cfg.joint_ids
+        ]
+
+        # 对每个环境取左右膝绝对角度的最大值；两膝都小于阈值才算伸直。
+        knees_straight = (
+            knee_angles.abs().amax(dim=-1)
+            < maximum_knee_angle
+        )
+
+        feet_contact = torch.stack(
+            [
+                ground_contact_force(env, cfg) > force_threshold
+                for cfg in ground_sensor_cfgs
+            ],
+            dim=-1,
+        ).all(dim=-1)
+
+        # 六项条件必须同时成立，才认为当前仿真步处于有效站立状态。
+        valid = (
+            (height > minimum_height)
+            & upright
+            & torso_upright
+            & (linear_speed < maximum_linear_speed)
+            & (angular_speed < maximum_angular_speed)
+            & knees_straight
+            & feet_contact
+        )
+
+        # 同一环境步被重复查询时，不重复累计。
+        new_step = (
+            env.episode_length_buf != self._last_step
+        )
+
+        # 有效时计数加一，无效时清零，从而要求站立状态必须连续保持。
+        updated = torch.where(
+            valid,
+            self._hold_steps + 1,
+            torch.zeros_like(self._hold_steps),
+        )
+
+        # 只在进入新的环境步时写回计数结果：
+        # - new_step=True：采用 updated，使有效环境加一、无效环境归零；
+        # - new_step=False：保留原计数，避免同一仿真步被多次查询时重复累加。
+        # [:] 表示原地更新已有张量，保持管理器内部状态张量本身不变。
+        self._hold_steps[:] = torch.where(
+            new_step,
+            updated,
+            self._hold_steps,
+        )
+
+        # 保存本次查询对应的 episode 步数。
+        self._last_step.copy_(env.episode_length_buf)
+
+        # 将要求保持的秒数换算成仿真步数，向上取整保证时长不少于 hold_time。
+        required_steps = math.ceil(
+            hold_time / env.step_dt
+        )
+
+        # 每个环境独立返回是否已经连续站稳足够长时间。
+        return self._hold_steps >= required_steps

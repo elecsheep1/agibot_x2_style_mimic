@@ -64,6 +64,20 @@ def main():
         print("\n===== X2 bodies =====")
         for index, name in enumerate(robot.body_names):
             print(f"{index:2d}: {name}")
+
+        contact_sensor = env.unwrapped.scene["contact_forces"]
+
+        print("\n===== Contact sensor bodies =====")
+        for index, name in enumerate(contact_sensor.body_names):
+            print(f"{index:2d}: {name}")
+
+        print("\n===== Contact sensor rigid-body paths =====")
+        for path in contact_sensor.body_physx_view.prim_paths:
+            print(path)
+
+        print("\n===== Contact force history shape =====")
+        print(contact_sensor.data.net_forces_w_history.torch.shape)
+
         ''' 诊断修改结束 '''
 
         # print info (this is vectorized environment)

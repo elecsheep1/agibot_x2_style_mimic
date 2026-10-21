@@ -1,0 +1,287 @@
+{
+  "criterion": "Initial 0.2 s pelvis and torso local gravity x > 0.75; X2 local +X faces forward/down when prone.",
+  "selection_basis": "actual initial reference pose, not the CMU text label",
+  "selected": [
+    "x2_getup_139_16_umr_v1_50hz.npz",
+    "x2_getup_139_17_umr_v1_50hz.npz",
+    "x2_getup_140_02_umr_v1_50hz.npz",
+    "x2_getup_v0_50hz.npz"
+  ],
+  "all_initial_pose_checks": [
+    {
+      "file": "x2_getup_139_16_umr_v1_50hz.npz",
+      "root_height": 0.08703277260065079,
+      "root_gravity": [
+        0.9927,
+        0.0106,
+        -0.12
+      ],
+      "root_gravity_median": [
+        0.993,
+        0.0094,
+        -0.1178
+      ],
+      "torso_gravity": [
+        0.9973,
+        -0.0664,
+        -0.0318
+      ],
+      "torso_gravity_median": [
+        0.998,
+        -0.0486,
+        -0.0413
+      ],
+      "initial_pose_category": "prone"
+    },
+    {
+      "file": "x2_getup_139_17_umr_v1_50hz.npz",
+      "root_height": 0.08897186815738678,
+      "root_gravity": [
+        0.987,
+        0.0011,
+        -0.1605
+      ],
+      "root_gravity_median": [
+        0.9877,
+        -0.0017,
+        -0.1566
+      ],
+      "torso_gravity": [
+        0.9986,
+        -0.0508,
+        0.0145
+      ],
+      "torso_gravity_median": [
+        0.999,
+        -0.0446,
+        0.0094
+      ],
+      "initial_pose_category": "prone"
+    },
+    {
+      "file": "x2_getup_139_18_umr_v1_50hz.npz",
+      "root_height": 0.16457124054431915,
+      "root_gravity": [
+        -0.6261,
+        0.7444,
+        -0.232
+      ],
+      "root_gravity_median": [
+        -0.6142,
+        0.7463,
+        -0.2564
+      ],
+      "torso_gravity": [
+        -0.0634,
+        0.9833,
+        -0.1705
+      ],
+      "torso_gravity_median": [
+        -0.0539,
+        0.9865,
+        -0.1546
+      ],
+      "initial_pose_category": "side_lying"
+    },
+    {
+      "file": "x2_getup_140_02_umr_v1_50hz.npz",
+      "root_height": 0.1158723458647728,
+      "root_gravity": [
+        0.946,
+        0.2788,
+        -0.1656
+      ],
+      "root_gravity_median": [
+        0.9459,
+        0.2784,
+        -0.1673
+      ],
+      "torso_gravity": [
+        0.9811,
+        0.1271,
+        0.146
+      ],
+      "torso_gravity_median": [
+        0.9818,
+        0.1283,
+        0.1401
+      ],
+      "initial_pose_category": "prone"
+    },
+    {
+      "file": "x2_getup_140_08_umr_v2_50hz.npz",
+      "root_height": 0.08008650690317154,
+      "root_gravity": [
+        -0.9982,
+        -0.0546,
+        -0.0264
+      ],
+      "root_gravity_median": [
+        -0.9982,
+        -0.0542,
+        -0.025
+      ],
+      "torso_gravity": [
+        -0.9472,
+        -0.1425,
+        -0.2874
+      ],
+      "torso_gravity_median": [
+        -0.9471,
+        -0.142,
+        -0.288
+      ],
+      "initial_pose_category": "supine"
+    },
+    {
+      "file": "x2_getup_140_09_umr_v1_50hz.npz",
+      "root_height": 0.12637674808502197,
+      "root_gravity": [
+        -0.8896,
+        0.4521,
+        -0.0649
+      ],
+      "root_gravity_median": [
+        -0.8907,
+        0.4506,
+        -0.0607
+      ],
+      "torso_gravity": [
+        -0.9867,
+        0.0836,
+        -0.1393
+      ],
+      "torso_gravity_median": [
+        -0.9865,
+        0.0814,
+        -0.1418
+      ],
+      "initial_pose_category": "supine"
+    },
+    {
+      "file": "x2_getup_side_umr_v1_50hz.npz",
+      "root_height": 0.19099915027618408,
+      "root_gravity": [
+        0.3219,
+        0.9265,
+        0.195
+      ],
+      "root_gravity_median": [
+        0.3241,
+        0.9255,
+        0.1959
+      ],
+      "torso_gravity": [
+        -0.1279,
+        0.9426,
+        -0.3084
+      ],
+      "torso_gravity_median": [
+        -0.1333,
+        0.9418,
+        -0.3088
+      ],
+      "initial_pose_category": "side_lying"
+    },
+    {
+      "file": "x2_getup_v0_50hz.npz",
+      "root_height": 0.09090394526720047,
+      "root_gravity": [
+        0.9814,
+        -0.1754,
+        -0.0783
+      ],
+      "root_gravity_median": [
+        0.9821,
+        -0.1689,
+        -0.0832
+      ],
+      "torso_gravity": [
+        0.9968,
+        -0.0528,
+        -0.0599
+      ],
+      "torso_gravity_median": [
+        0.9971,
+        -0.0488,
+        -0.0598
+      ],
+      "initial_pose_category": "prone"
+    },
+    {
+      "file": "x2_stand_width034_candidate.npz",
+      "root_height": 0.6674284338951111,
+      "root_gravity": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "root_gravity_median": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "torso_gravity": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "torso_gravity_median": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "initial_pose_category": "upright"
+    }
+  ],
+  "copies": [
+    {
+      "source": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/data/motions/x2_getup_139_16_umr_v1_50hz.npz",
+      "copy": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/data/motions/prone_getup/x2_getup_139_16_umr_v1_50hz.npz",
+      "sha256": "68ff79292a46f036b901fedc326df867d1329fdfa4bd7a9aa3e26de188edabf5"
+    },
+    {
+      "source": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/data/motions/x2_getup_139_16_umr_v1_50hz.json",
+      "copy": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/data/motions/prone_getup/x2_getup_139_16_umr_v1_50hz.json",
+      "sha256": "46b50f2c406a135d035acc8ff5ceae70724fac0ab1b7a044668565e63b772f44"
+    },
+    {
+      "source": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/data/motions/x2_getup_139_17_umr_v1_50hz.npz",
+      "copy": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/data/motions/prone_getup/x2_getup_139_17_umr_v1_50hz.npz",
+      "sha256": "f0f001dadfb26ab313f3174a6d2c68bd68a4ce446f33c5626869afcc66b57caf"
+    },
+    {
+      "source": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/data/motions/x2_getup_139_17_umr_v1_50hz.json",
+      "copy": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/data/motions/prone_getup/x2_getup_139_17_umr_v1_50hz.json",
+      "sha256": "34ff6dfff4027e971529535c8f67845cd3012b8ad3a6b2b1471eeeedc2d9efe4"
+    },
+    {
+      "source": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/data/motions/x2_getup_140_02_umr_v1_50hz.npz",
+      "copy": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/data/motions/prone_getup/x2_getup_140_02_umr_v1_50hz.npz",
+      "sha256": "626be64e949949475009525f70195b36897ebe17cc88981deb52fa6dfab409ff"
+    },
+    {
+      "source": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/data/motions/x2_getup_140_02_umr_v1_50hz.json",
+      "copy": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/data/motions/prone_getup/x2_getup_140_02_umr_v1_50hz.json",
+      "sha256": "68d312b40f4258d77e8d43103830ad2341ae53ef639d1763173547c31d184a0d"
+    },
+    {
+      "source": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/data/motions/x2_getup_v0_50hz.npz",
+      "copy": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/data/motions/prone_getup/x2_getup_v0_50hz.npz",
+      "sha256": "43d482463b0d4379aa52b0e8c587f132ffc2f7d80fd641b405a3e2f9546276e4"
+    },
+    {
+      "source": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/data/motions/x2_getup_v0_50hz.json",
+      "copy": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/data/motions/prone_getup/x2_getup_v0_50hz.json",
+      "sha256": "a5601372b8fc348956de61eca3d6a27de7272ef58fe8676f8c6510ccd1569390"
+    },
+    {
+      "source": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/data/motions/x2_getup_v0_50hz_validation.json",
+      "copy": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/data/motions/prone_getup/x2_getup_v0_50hz_validation.json",
+      "sha256": "02cf9abd7ea87871c0be4ec4569cc178c253a5c29aa795b325f06f2cd6d6542a"
+    }
+  ],
+  "original_npz_hashes_unchanged": true,
+  "existing_motions_json": "preserved unchanged; no loader schema assumed",
+  "reference_schema_npz_outside_motions": []
+}

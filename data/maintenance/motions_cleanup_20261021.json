@@ -1,0 +1,69 @@
+{
+  "date": "2026-10-21",
+  "reason": "Remove superseded 140_08 v1 and unused standing-extension experiments; preserve active prone/stand and three accepted UMR candidates",
+  "deleted": [
+    {
+      "file": "x2_getup_v2_early_candidate.npz",
+      "bytes": 425607,
+      "sha256": "17afc298ed324948911bc84a97d0623705adace27952b53356c7b06216c5678c"
+    },
+    {
+      "file": "x2_getup_v2_early_candidate.extension.json",
+      "bytes": 780,
+      "sha256": "3ece07149bfd534981bd80393a89d3239a7feaff2b93d4e667f5b8600371fa19"
+    },
+    {
+      "file": "x2_getup_v3_reposition_candidate.reposition.json",
+      "bytes": 112925,
+      "sha256": "b8b539f4fd6fc5f26442500656f4fa0f8772210106a2631d4eab3e60b1d9349e"
+    },
+    {
+      "file": "x2_getup_v1_stand_candidate.npz",
+      "bytes": 562789,
+      "sha256": "40b3b67caf74a2dbd1f768315b27ac437709b7427a881c718d7479557ff97abe"
+    },
+    {
+      "file": "x2_getup_v1_stand_candidate.extension.json",
+      "bytes": 784,
+      "sha256": "3d123a20c3d992f2da68f5ea4bb4459e5c153543458e8fc8926318e7a059cb9d"
+    },
+    {
+      "file": "x2_getup_v2_cut54_candidate.extension.json",
+      "bytes": 782,
+      "sha256": "1e9e3d49846f98f55d0ce384adbf469a8664a5974081a93647a0d892c41ce9e0"
+    },
+    {
+      "file": "x2_getup_v3_reposition_candidate.npz",
+      "bytes": 676377,
+      "sha256": "3265890b47984a2b5e75b7f896a5902bcb10e54b2fb0bb6377321be125c8ee67"
+    },
+    {
+      "file": "x2_getup_140_08_umr_v1_50hz.json",
+      "bytes": 5481,
+      "sha256": "12621cef5eac5e1d733f578adaf9093a67a59e9926ae8b7af4259419cde6066e"
+    },
+    {
+      "file": "x2_getup_v2_cut54_candidate.npz",
+      "bytes": 444170,
+      "sha256": "15ea0be023c38f6d109ef3df9689f321a2085345e902cdbd475a498ae5f8f79a"
+    },
+    {
+      "file": "x2_getup_140_08_umr_v1_50hz.npz",
+      "bytes": 497042,
+      "sha256": "a3b81a2f0150aca6c743db1cc6020c5c36554d4bda6e1d3e24da394265efb8bf"
+    }
+  ],
+  "preserved": {
+    "x2_getup_v0_50hz.json": "a5601372b8fc348956de61eca3d6a27de7272ef58fe8676f8c6510ccd1569390",
+    "x2_getup_side_umr_v1_50hz.npz": "eae87989135c2c52741dfa3fb3fbf97064ea4f6ef45cf991761c5f0b468d6fc4",
+    "x2_stand_width034_candidate.npz": "6aceaffc69681ffb7174d554138f05e2a2ebffc26e8021871a549539227e291c",
+    "x2_getup_v0_50hz.npz": "43d482463b0d4379aa52b0e8c587f132ffc2f7d80fd641b405a3e2f9546276e4",
+    "x2_getup_v0_50hz_validation.json": "02cf9abd7ea87871c0be4ec4569cc178c253a5c29aa795b325f06f2cd6d6542a",
+    "x2_stand_width034_candidate.stance.json": "5986188b52a5a00f473414825361b39ed7df82a3f8620a1c57aaf04df4d9ac52",
+    "x2_getup_140_08_umr_v2_50hz.json": "edb7a75618faa5e5d4f65ce0098bcaf0b27b022e6db3b741eba707bfeb039ce9",
+    "x2_getup_140_08_umr_v2_50hz.npz": "fd6df64d81027abf41b8ccb52da8aee2b9f7c49f2f8e3937b80aae8c9dad6fb1",
+    "x2_getup_140_02_umr_v1_50hz.npz": "626be64e949949475009525f70195b36897ebe17cc88981deb52fa6dfab409ff",
+    "x2_getup_140_02_umr_v1_50hz.json": "68d312b40f4258d77e8d43103830ad2341ae53ef639d1763173547c31d184a0d",
+    "x2_getup_side_umr_v1_50hz.json": "6f0aad974c111c408d61fb0f071d771c44eb3b00c273eb9cadbb5af9b9d432ca"
+  }
+}

@@ -181,7 +181,7 @@ class RewardsCfg:
         weight=2.0,
         params={
             "command_name": COMMAND_NAME,
-            "std": 0.5,
+            "std": 0.25,
         },
     )
 
@@ -253,7 +253,7 @@ class RewardsCfg:
     # 根据近期接触状态，抑制支撑脚水平滑动。
     feet_slide = RewTerm(
         func=mdp.feet_slide,
-        weight=-1.0,
+        weight=-0.1,
         params={
             "sensor_cfg": SceneEntityCfg(
                 "contact_forces",

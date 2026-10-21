@@ -1,0 +1,35 @@
+{
+  "status": "stationary_stance_candidate_NOT_dynamic_balance_validated",
+  "purpose": "standing-only balance experiment; not a get-up reference or foot-reposition trajectory",
+  "old_sole_width_m": 0.49440569123803557,
+  "new_sole_width_m": 0.340000000659292,
+  "height_m": 0.6674284174857364,
+  "knees_rad": [
+    0.2798919605780707,
+    0.3238668611385658
+  ],
+  "foot_clearance_m": [
+    0.0010001164727351643,
+    0.0009998835272654544
+  ],
+  "foot_position_error_m": 1.1716765762253688e-07,
+  "foot_rotation_error_deg": 6.925758853272097e-06,
+  "com_footprint_margin_m": 0.10425506942161517,
+  "leg_joint_angles": {
+    "left_hip_pitch_joint": -0.06683790686569094,
+    "left_hip_roll_joint": 0.08049923978952118,
+    "left_hip_yaw_joint": 0.25286017399261923,
+    "left_knee_joint": 0.2798919605780707,
+    "left_ankle_pitch_joint": -0.19489506438305837,
+    "left_ankle_roll_joint": -0.061010600412182855,
+    "right_hip_pitch_joint": -0.15766076853547487,
+    "right_hip_roll_joint": -0.07644599820769428,
+    "right_hip_yaw_joint": -0.16652041069421109,
+    "right_knee_joint": 0.3238668611385658,
+    "right_ankle_pitch_joint": -0.15553885963821792,
+    "right_ankle_roll_joint": 0.04837547038981307
+  },
+  "kinematic_checks_passed": true,
+  "dynamic_balance_passed": null,
+  "self_collision_checked": false
+}

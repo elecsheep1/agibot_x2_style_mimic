@@ -60,6 +60,64 @@ def main() -> None:
     if rigid_body_count == 0:
         raise RuntimeError("No rigid bodies found; USD was not saved.")
 
+
+    # 备份修改前的入口层。
+    from shutil import copy2
+
+    backup_path = usd_path.with_name(
+        "x2_ultra.before_assembly_filters.usda"
+    )
+    if not backup_path.exists():
+        copy2(usd_path, backup_path)
+
+    # 原头部过滤，加上四对已验证的装配近邻。
+    collision_pairs = [
+        ("head_pitch_link", "torso_link"),
+        ("left_ankle_roll_link", "left_knee_link"),
+        ("right_ankle_roll_link", "right_knee_link"),
+        ("left_wrist_roll_link", "left_wrist_yaw_link"),
+        ("right_wrist_roll_link", "right_wrist_yaw_link"),
+    ]
+
+    required_names = {
+        name
+        for pair in collision_pairs
+        for name in pair
+    }
+
+    bodies = {}
+    for prim in stage.Traverse():
+        if not prim.HasAPI(UsdPhysics.RigidBodyAPI):
+            continue
+
+        name = prim.GetName()
+        if name not in required_names:
+            continue
+
+        if name in bodies:
+            raise RuntimeError(f"Duplicate rigid body: {name}")
+
+        bodies[name] = prim
+
+    missing = required_names - bodies.keys()
+    if missing:
+        raise RuntimeError(
+            f"Cannot find rigid bodies: {sorted(missing)}"
+        )
+
+    for first, second in collision_pairs:
+        filtered_pairs = UsdPhysics.FilteredPairsAPI.Apply(
+            bodies[first]
+        )
+        filtered_pairs.CreateFilteredPairsRel().AddTarget(
+            bodies[second].GetPath()
+        )
+
+        print(f"[FILTER] {first} <-> {second}")
+
+    print(f"[BACKUP] {backup_path}")
+
+
     stage.GetRootLayer().Save()
 
     print(f"\nEnabled contact reports on {rigid_body_count} rigid bodies.")
