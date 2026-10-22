@@ -42,3 +42,14 @@ gym.register(
         "amp_cfg_entry_point": f"{agents.__name__}.x2_getup_amp_cfg:X2GetUpAMPRunnerCfg",
     },
 )
+
+gym.register(
+    id="X2-Prone-MultiMotion-v0",
+    entry_point=f"{__name__}.x2_multimotion_getup_env:X2MultiMotionGetUpEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.x2_multimotion_getup_env_cfg:X2MultiMotionGetUpEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.x2_multimotion_amp_cfg:X2MultiMotionAMPRunnerCfg",
+        "amp_cfg_entry_point": f"{agents.__name__}.x2_multimotion_amp_cfg:X2MultiMotionAMPRunnerCfg",
+    },
+)

@@ -19,28 +19,34 @@ def _write_reference_state(
         joint_vel,
     ):
     """把参考状态写入物理仿真。"""
-    # 把根位姿、根速度和关节状态写入物理仿真。
+    # 把根位姿、根速度和关节状态写入物理仿真。 [x, y, z, qx, qy, qz, qw]
     robot.write_root_link_pose_to_sim_index(
         root_pose=root_pose,
         env_ids=env_ids,
     )
+    # [vx, vy, vz, wx, wy, wz]
     robot.write_root_link_velocity_to_sim_index(
         root_velocity=root_velocity,
         env_ids=env_ids,
     )
     # 兼容此前发现的根速度写入问题：
     # 保留根原点速度缓存，同时修正 PhysX 接收的质心速度。
+    # 质心在刚体坐标系中的位姿。
+    # 选择指定环境；
+    # 选择第 0 个刚体，通常是根部刚体；
+    # 取位置的前三个分量。
     offset_b = robot.data.body_com_pose_b.torch[
         env_ids, 0, :3
     ]
     quaternion = root_pose[:, 3:7]
-
+    # 四元数旋转公式：v_rotated = v + w * t + q_vector × t    t = 2 * (q_vector × v)
     t = 2.0 * torch.cross(
         quaternion[:, :3],
         offset_b,
         dim=-1,
     )
 
+    # 也就是把质心相对根部原点的局部偏移，转换成世界坐标系中的偏移。
     offset_w = (
         offset_b
         + quaternion[:, 3:4] * t
@@ -51,6 +57,7 @@ def _write_reference_state(
         )
     )
 
+    # 质心速度 v_com = v_origin + ω × r
     com_velocity = root_velocity.clone()
     com_velocity[:, :3] += torch.cross(
         root_velocity[:, 3:6],
@@ -77,6 +84,7 @@ def _write_reference_state(
     # 当前 PhysX 后端写入根状态后，部分机身坐标系派生缓存
     # 可能仍保留本控制步重置前的值。
     # 使缓存失效，下次读取时根据新姿态和速度重新计算。
+    # 遍历一组机器人数据缓存名称。
     for buffer_name in (
         "_projected_gravity_b",
         "_root_link_lin_vel_b",
@@ -85,9 +93,9 @@ def _write_reference_state(
         "_root_com_ang_vel_b",
         "_heading_w",
     ):
-        buffer = getattr(robot.data, buffer_name, None)
+        buffer = getattr(robot.data, buffer_name, None)         # 动态获取属性，如果属性不存在，就返回 None
         if buffer is not None:
-            buffer.timestamp = -1.0
+            buffer.timestamp = -1.0         # 把缓存时间戳设置为 -1.0，表示缓存已经失效。
 
 def reset_from_reference(
     env,
@@ -120,6 +128,7 @@ def reset_from_reference(
     # 参考动作只需要读取一次，之后直接复用缓存在环境对象上的张量。
     cache = getattr(env, "_getup_reference_cache", None)
 
+    # 如果缓存不存在或 motion_file 不同，则重新加载参考动作。
     if (cache is None or cache.get("motion_file") != str(motion_file)):
         with np.load(motion_file, allow_pickle=False) as data:
             # metadata_json 在 npz 中以字符串标量保存。
@@ -142,6 +151,7 @@ def reset_from_reference(
             ]
 
             # 读取完整片段，后面按帧编号选择初始化状态。
+            # 拼接根部位姿
             pose = np.concatenate(
                 (
                     data["root_pos_w"],
@@ -150,6 +160,7 @@ def reset_from_reference(
                 axis=-1,
             )
 
+            # 拼接根部线速度和角速度
             root_velocity_data = np.concatenate(
                 (
                     data["root_lin_vel_w"],
@@ -158,10 +169,12 @@ def reset_from_reference(
                 axis=-1,
             )
 
+            # 按机器人关节顺序重排关节位置和速度
             joint_pos = data["joint_pos"][:, indices].copy()
             joint_vel_data = data["joint_vel"][:, indices].copy()
 
         # 将 NumPy 数据转到仿真设备上，供所有并行环境重复使用。
+        # 把动作缓存到 GPU 或 CPU
         cache = {
             "root_pose": torch.tensor(
                 pose,
@@ -189,6 +202,7 @@ def reset_from_reference(
 
         env._getup_reference_cache = cache
 
+    # 得到这次要重置的环境数量。s
     count = len(env_ids)
 
     last = len(cache["root_pose"]) - 1
@@ -201,6 +215,7 @@ def reset_from_reference(
         < random_frame_probability
     )
 
+    # 随机选择参考帧编号，范围在 [lower, upper] 之间。
     frames = torch.randint(
         lower,
         upper + 1,
@@ -216,14 +231,16 @@ def reset_from_reference(
     )
 
     root_pose = cache["root_pose"][frames].clone()
-    root_pose[:, :3] += env.scene.env_origins[env_ids]
-    root_pose[:, 2] += 0.01
+    # 动作文件中的根部位置一般是局部坐标，因此需要加上对应环境的世界坐标原点。
+    root_pose[:, :3] += env.scene.env_origins[env_ids]      # 把环境原点加到根位置上，得到世界坐标系下的根位置
+    root_pose[:, 2] += 0.01                                 # 在 z 方向上加一个小的偏移，避免根部穿透地面
 
     joint_pos = cache["joint_pos"][frames].clone()
     root_velocity = cache["root_velocity"][frames].clone()
     joint_vel = cache["joint_vel"][frames].clone()
 
     # 固定首帧保持零速度，随机帧恢复对应参考速度。
+    # ~random_start 表示逻辑取反
     root_velocity[~random_start] = 0.0
     joint_vel[~random_start] = 0.0
 
@@ -235,6 +252,7 @@ def reset_from_reference(
             device=env.device,
         )
 
+    # 保存出生帧编号，方便诊断。
     env._getup_reference_frame_ids[env_ids] = frames
 
     _write_reference_state(
@@ -249,9 +267,11 @@ def reset_from_motion_dataset(
     policy_joint_names,
     start_phase=0.0,
     end_phase=0.0,
-    use_reference_velocity=False,
-    height_offset=0.01,
+    use_reference_velocity=False,           # 是否使用参考速度
+    height_offset=0.01,                     # 高度偏移
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    initial_frame_probability=0.5,
+    transition_frame_ranges=None,
 ):
     """按权重选择动作；默认从首帧、零速度出生。"""
     if not math.isfinite(height_offset) or height_offset < 0.0:
@@ -268,6 +288,7 @@ def reset_from_motion_dataset(
         return
 
     # 加载一次，后续重置复用。
+    # 构造数据集缓存的键。
     key = (
         str(Path(manifest_file).resolve()),
         tuple(robot.joint_names),
@@ -276,6 +297,10 @@ def reset_from_motion_dataset(
         float(env.step_dt),
     )
     cache = getattr(env, "_getup_motion_dataset_cache", None)
+    '''
+    cache[0]  # key
+    cache[1]  # dataset
+    '''
 
     if cache is None or cache[0] != key:
         dataset = MotionDataset(
@@ -287,12 +312,14 @@ def reset_from_motion_dataset(
         )
         env._getup_motion_dataset_cache = (key, dataset)
     else:
-        dataset = cache[1]
+        dataset = cache[1]          # 如果缓存存在且键匹配，则直接使用缓存中的数据集对象
 
     state = dataset.sample_reset_states(
         len(env_ids),
         start_phase,
         end_phase,
+        initial_frame_probability=initial_frame_probability,
+        transition_frame_ranges=transition_frame_ranges,
     )
 
     root_pose = state["root_pose"].clone()
@@ -313,6 +340,7 @@ def reset_from_motion_dataset(
         min=limits[:, :, 0],
         max=limits[:, :, 1],
     )
+    # 计算每个环境中被裁剪的关节数量，判断裁剪前后关节位置的绝对差值是否大于 1e-6，然后对每个环境求和得到裁剪数量。
     clamp_count = ((clamped - joint_pos).abs() > 1e-6).sum(dim=-1)
     joint_pos = clamped
 
@@ -339,6 +367,7 @@ def reset_from_motion_dataset(
                 ),
             )
 
+    # 保存每个环境的出生动作、帧号和裁剪数量。
     env._getup_reference_frame_ids[env_ids] = state["frame_ids"]
     env._getup_reference_motion_ids[env_ids] = state["motion_ids"]
     env._getup_reference_joint_clamp_counts[env_ids] = clamp_count
@@ -465,6 +494,94 @@ def ground_contact_force(
         raise RuntimeError(f"{sensor_cfg.name} 匹配数量不正确：{forces.shape}")
 
     return forces.norm(dim=-1).amax(dim=(1, 2, 3))
+
+def current_ground_contact_force(
+    env,
+    sensor_cfg: SceneEntityCfg,
+):
+    """返回当前采样的地面接触力大小，形状为 [num_envs]。"""
+    sensor = env.scene.sensors[sensor_cfg.name]
+    forces = sensor.data.force_matrix_w.torch
+
+    if forces.shape[1:] != (1, 1, 3):
+        raise RuntimeError(f"{sensor_cfg.name} 必须只匹配一个刚体和一个地面")
+
+    return forces[:, 0, 0, :].norm(dim=-1)
+
+def getup_transition_reward(
+    env,
+    asset_cfg: SceneEntityCfg,
+    torso_cfg: SceneEntityCfg,
+    foot_sensor_cfgs: tuple[SceneEntityCfg, ...],
+    hand_sensor_cfgs: tuple[SceneEntityCfg, ...],
+):
+    """为抬髋、改善躯干姿态、伸膝和逐渐离手提供连续反馈。防止卡在蹲伏阶段。"""
+    robot = env.scene[asset_cfg.name]
+
+    height = robot.data.root_pos_w.torch[:, 2] - env.scene.env_origins[:, 2]
+
+    # 0.25 m 开始介入，0.45 m 完全介入。
+    # 避免直接要求俯卧状态伸膝
+    gate = ((height - 0.25) / 0.20).clamp(0.0, 1.0)
+    gate = gate.square() * (3.0 - 2.0 * gate)
+
+    # 从当前约 0.32 m 的停滞高度，到半蹲高度，始终有反馈。
+    height_score = ((height - 0.25) / 0.28).clamp(0.0, 1.0)
+
+    torso_q = robot.data.body_link_pose_w.torch[
+        :, torso_cfg.body_ids, 3:7
+    ]
+    # 1 - 2 * (x² + y²)算出的是躯干自身向上方向与世界竖直向上方向夹角的余弦
+    torso_up = (
+        1.0
+        - 2.0 * torso_q[..., :2].square().sum(dim=-1)
+    ).amin(dim=-1).clamp(-1.0, 1.0)
+    # 使用连续余弦分数，避免在大倾角时奖励几乎为零。
+    torso_score = ((torso_up + 1.0) * 0.5).clamp(0.0, 1.0)
+
+    knees = robot.data.joint_pos.torch[:, asset_cfg.joint_ids]
+    # 过度屈膝时不再奖励，避免卡在蹲伏阶段。
+    knee_excess = (knees.abs() - 1.50).clamp_min(0.0)
+
+    # 深屈膝约 2.4 rad 时接近零；逐渐伸到 1.5 rad 时达到一。
+    # 不继续奖励把膝盖伸直。
+    knee_score = (1.0 - knee_excess / 0.90).clamp(0.0, 1.0).mean(dim=-1)
+
+    feet_force = torch.stack(
+        [
+            current_ground_contact_force(env, cfg)
+            for cfg in foot_sensor_cfgs
+        ],
+        dim=-1
+    )
+    # 要求每一只脚都承受一定的地面接触力，避免卡在蹲伏阶段。
+    # 5 N 以下不算支撑，30 N 以上门控为1。
+    feet_gate = ((feet_force - 5.0) / 25.0).clamp(0.0, 1.0).amin(dim=-1)
+
+    hand_force = torch.stack(
+        [
+            current_ground_contact_force(env, cfg)
+            for cfg in hand_sensor_cfgs
+        ],
+        dim=-1
+    ).sum(dim=-1)
+    # 0.34 m 以下不要求离手，0.50 m 以上完全离手。
+    release_gate = ((height - 0.34) / 0.16).clamp(0.0, 1.0)
+    release_gate = release_gate.square() * (3.0 - 2.0 * release_gate)
+    hand_release_score = torch.exp(-hand_force / 80.0)
+
+    # 分项相加：不要求所有转换条件同时成立才获得奖励。
+    return (
+        0.40 * height_score
+        + gate * (
+            0.30 * torso_score
+            + 0.20 * feet_gate * knee_score
+        )
+        + 0.10 * release_gate * feet_gate * hand_release_score
+    )
+
+
+
 
 def crouch_stability_reward(
     env,

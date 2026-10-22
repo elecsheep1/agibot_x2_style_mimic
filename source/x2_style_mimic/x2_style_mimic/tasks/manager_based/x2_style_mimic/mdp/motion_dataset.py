@@ -145,20 +145,78 @@ class MotionDataset:
         num_envs,
         start_phase=0.0,
         end_phase=0.0,
+        initial_frame_probability=0.5,
+        transition_frame_ranges=None,
     ):
-        """先选动作，再选帧；默认每条动作都从首帧出生。"""
+        """先选动作，再选择首帧或该动作的转换帧。"""
         if not (0.0 <= start_phase <= end_phase <= 1.0):
-            raise ValueError("start_phase/end_phase 必须满足 0.0 <= start < end <= 1.0")
+            raise ValueError(
+                "必须满足 0 <= start_phase <= end_phase <= 1"
+            )
 
         motion_ids = self._sample_motion_ids(num_envs)
         last = self.lengths[motion_ids] - 1
 
-        lower = torch.floor(start_phase * last).long()
-        upper = torch.floor(end_phase * last).long()
+        if transition_frame_ranges is None:
+            # 保留原采样方式，兼容现有训练和 play。
+            lower = torch.floor(start_phase * last).long()
+            upper = torch.floor(end_phase * last).long()
+        else:
+            if not (0.0 <= initial_frame_probability <= 1.0):
+                raise ValueError(
+                    "initial_frame_probability 必须在 [0, 1] 内"
+                )
 
+            if len(transition_frame_ranges) != len(self.clips):
+                raise ValueError(
+                    "转换区间数量必须与 motions 中的动作数量一致"
+                )
+
+            for motion_id, bounds in enumerate(
+                transition_frame_ranges
+            ):
+                if len(bounds) != 2:
+                    raise ValueError("每个转换区间必须包含起止帧")
+
+                lo, hi = bounds
+                length = int(self.lengths[motion_id].item())
+
+                if (
+                    not isinstance(lo, int)
+                    or not isinstance(hi, int)
+                    or not 0 <= lo <= hi < length
+                ):
+                    raise ValueError(
+                        f"动作 {motion_id} 的转换区间无效："
+                        f"{bounds}，总帧数 {length}"
+                    )
+
+            ranges = torch.tensor(
+                transition_frame_ranges,
+                dtype=torch.long,
+                device=self.device,
+            )
+
+            lower = ranges[motion_ids, 0]
+            upper = ranges[motion_ids, 1]
+
+        # 在每个环境对应的闭区间 [lower, upper] 内均匀抽帧。
         frame_ids = lower + torch.floor(
-            torch.rand(num_envs, device=self.device) * (upper - lower + 1)
+            torch.rand(num_envs, device=self.device)
+            * (upper - lower + 1)
         ).long()
+
+        if transition_frame_ranges is not None:
+            # 每个环境独立决定是否改为该动作第0帧。
+            use_initial = (
+                torch.rand(num_envs, device=self.device)
+                < initial_frame_probability
+            )
+            frame_ids = torch.where(
+                use_initial,
+                torch.zeros_like(frame_ids),
+                frame_ids,
+            )
 
         result = {
             key: torch.empty(
