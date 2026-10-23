@@ -122,6 +122,18 @@ class MultiMotionRewardsCfg(GetUpRewardsCfg):
         weight=-0.50,
     )
 
+    support_transfer = RewTerm(
+        func=getup_mdp.getup_support_transfer_reward,
+        weight=2.0,
+        params=deepcopy(transition.params),
+    )
+
+    completion = RewTerm(
+        func=getup_mdp.getup_completion_reward,
+        weight=6.0,
+        params=deepcopy(transition.params),
+    )
+
 
 @configclass
 class MultiMotionTerminationsCfg(GetUpTerminationsCfg):

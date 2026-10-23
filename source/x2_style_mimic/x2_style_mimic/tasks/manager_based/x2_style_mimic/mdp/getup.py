@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import math
 from pathlib import Path
@@ -7,6 +9,11 @@ import torch
 
 from .motion_dataset import MotionDataset
 from isaaclab.managers import ManagerTermBase, SceneEntityCfg
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from isaaclab.envs import ManagerBasedRLEnv
+
 
 
 def _write_reference_state(
@@ -391,6 +398,19 @@ def reset_from_motion_dataset(
         joint_vel,
     )
 
+def smoothstep(x):
+    x = x.clamp(0.0, 1.0)
+    return x.square() * (3.0 - 2.0 * x)
+
+def _torso_rise_quality(robot, torso_cfg):
+    """连续奖励抬胸，保留少量低姿态探索收益。"""
+    quat = robot.data.body_link_pose_w.torch[
+        :, torso_cfg.body_ids, 3:7
+    ]
+    torso_up = (1.0 - 2.0 * quat[..., :2].square().sum(dim=-1)).amin(dim=-1)
+
+    return 0.10 + 0.90 * torso_up.clamp(0.0, 1.0).square()
+
 def height_reward(
     env,
     minimum_height: float,
@@ -648,6 +668,142 @@ def getup_transition_reward(
         base_score * transition_quality
         + 0.50 * balanced_score
     )
+
+def _getup_completion_scores(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg,
+    torso_cfg: SceneEntityCfg,
+    foot_sensor_cfgs: tuple[SceneEntityCfg, ...],
+    hand_sensor_cfgs: tuple[SceneEntityCfg, ...],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    robot = env.scene[asset_cfg.name]
+
+    height = robot.data.root_pos_w.torch[:, 2] - env.scene.env_origins[:, 2]
+
+    root_up = (-robot.data.projected_gravity_b.torch[:, 2]).clamp(-1.0, 1.0)
+
+    torso_quat = robot.data.body_link_pose_w.torch[
+        :, torso_cfg.body_ids, 3:7
+    ]
+    torso_up = (
+        1.0 - 2.0 * torso_quat[..., :2].square().sum(dim=-1)
+    ).amin(dim=-1).clamp(-1.0, 1.0)
+
+    knees = robot.data.joint_pos.torch[:, asset_cfg.joint_ids]
+
+    feet_force = torch.stack(
+        [
+            current_ground_contact_force(env, cfg)
+            for cfg in foot_sensor_cfgs
+        ],
+        dim=-1
+    )
+    both_feet_score = (
+        (feet_force - 5.0) / 25.0
+    ).clamp(0.0, 1.0).amin(dim=-1)
+
+    hand_force = torch.stack(
+        [
+            current_ground_contact_force(env, cfg)
+            for cfg in hand_sensor_cfgs
+        ],
+        dim=-1
+    ).sum(dim=-1)
+    hand_release_score = torch.exp(-hand_force / 80.0)
+
+    transfer_gate = smoothstep((height - 0.30) / 0.15)
+    height_score = smoothstep((height - 0.40) / 0.15)
+    # 躯干从倾角 80° 到 20° 平滑增长
+    torso_start = math.cos(math.radians(80.0))  # 约为 0.1736
+    torso_target = math.cos(math.radians(20.0))    # 约为 0.9397
+    torso_score = smoothstep((torso_up - torso_start) / (torso_target - torso_start))
+
+    # 骨盆从倾角 70° 到 20° 平滑增长
+    root_start = math.cos(math.radians(70.0))   # 约为 0.3420
+    root_target = math.cos(math.radians(20.0))      # 约为 0.9397
+    root_score = smoothstep((root_up - root_start) / (root_target - root_start))
+
+    # 抬胸到约 75° 时开始加强要求，35° 时完全加强。
+    poseture_start = math.cos(math.radians(75.0))  # 约为 0.2588
+    poseture_target = math.cos(math.radians(35.0))    # 约为 0.8192
+    posture_progress = smoothstep((torso_up - poseture_start) / (poseture_target - poseture_start))
+
+    # 弯曲更多的一条腿决定伸膝得分。
+    # 第一版采用 0.8 rad 满分，避免一开始要求过度伸直。
+    max_knee = knees.abs().amax(dim=-1)
+    knee_score = smoothstep((1.80 - max_knee) / (1.80 - 0.80))
+
+    # 当前姿态也保留少量伸膝反馈，随抬胸逐步加强。
+    knee_strength = 0.20 + 0.80 * posture_progress
+
+    # 离手要求随姿态进度增强，并由双脚接触调制。
+    # 没有抬胸时，避免鼓励贸然松手。
+    release_strength = posture_progress * both_feet_score
+
+    # 过程奖励采用分别相加，避免多个小分数相乘后消失。
+    # 双脚接触不再单独贡献一大块固定收益。
+    transfer_reward = transfer_gate * (
+        0.15 * height_score
+        + 0.35 * torso_score
+        + 0.15 * root_score
+        + 0.20 * knee_strength * knee_score
+        + 0.15 * release_strength * hand_release_score
+    )
+
+    root_vel = robot.data.root_link_vel_w.torch
+    motion_score = torch.exp(
+        -root_vel[:, :3].square().sum(dim=-1) / 0.25**2
+        -root_vel[:, 3:6].square().sum(dim=-1) / 0.60**2
+    )
+
+    # 联合完成奖励仍要求各条件同时改善。
+    # 高度从 0.42 m 开启，到 0.55 m 完全开启。
+    completion_gate = smoothstep((height - 0.42) / 0.13)
+
+    completion_reward = (
+        completion_gate
+        * root_score
+        * torso_score
+        * both_feet_score
+        * hand_release_score
+        * knee_score
+        * motion_score
+    )
+
+    return transfer_reward, completion_reward
+
+
+def getup_support_transfer_reward(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg,
+    torso_cfg: SceneEntityCfg,
+    foot_sensor_cfgs: tuple[SceneEntityCfg, ...],
+    hand_sensor_cfgs: tuple[SceneEntityCfg, ...],
+) -> torch.Tensor:
+    transfer_reward, _ = _getup_completion_scores(
+        env,
+        asset_cfg,
+        torso_cfg,
+        foot_sensor_cfgs,
+        hand_sensor_cfgs,
+    )
+    return transfer_reward
+
+def getup_completion_reward(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg,
+    torso_cfg: SceneEntityCfg,
+    foot_sensor_cfgs: tuple[SceneEntityCfg, ...],
+    hand_sensor_cfgs: tuple[SceneEntityCfg, ...],
+) -> torch.Tensor:
+    _, completion_reward = _getup_completion_scores(
+        env,
+        asset_cfg,
+        torso_cfg,
+        foot_sensor_cfgs,
+        hand_sensor_cfgs,
+    )
+    return completion_reward
 
 def transition_motion_penalty(
     env,
@@ -982,3 +1138,4 @@ class GetUpSuccess(ManagerTermBase):
 
         # 每个环境独立返回是否已经连续站稳足够长时间。
         return self._hold_steps >= required_steps
+ 
