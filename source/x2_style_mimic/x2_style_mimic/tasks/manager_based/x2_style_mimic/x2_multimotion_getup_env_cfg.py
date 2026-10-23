@@ -63,7 +63,8 @@ class MultiMotionGetUpEventsCfg:
             "policy_joint_names": list(POLICY_JOINT_NAMES),
             "start_phase": 0.0,
             "end_phase": 0.0,
-            "use_reference_velocity": False,
+            "use_reference_velocity": True,
+            "zero_initial_frame_velocity": True,
             "height_offset": 0.01,
             "initial_frame_probability": 0.5,
             "transition_frame_ranges": (
@@ -113,6 +114,12 @@ class MultiMotionRewardsCfg(GetUpRewardsCfg):
                 SceneEntityCfg("right_hand_ground_contact"),
             ),
         },
+    )
+
+    # 多动作任务使用新的转换运动惩罚，替换原 rise_speed。
+    rise_speed = RewTerm(
+        func=getup_mdp.transition_motion_penalty,
+        weight=-0.50,
     )
 
 

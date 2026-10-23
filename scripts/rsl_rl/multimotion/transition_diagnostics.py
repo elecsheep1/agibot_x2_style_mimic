@@ -83,6 +83,9 @@ class TransitionDiagnostics(MultiMotionDiagnostics):
             q[:, None, :].expand(-1, 2, -1),
             body[:, self.foot_ids, :3] - poses[:, None, :3],
         )
+        foot_pose = body[:, self.foot_ids]
+        foot_velocity = r.data.body_link_vel_w.torch[:, self.foot_ids]
+        foot_rpy = roll_pitch_yaw_xyzw(foot_pose[..., 3:7]) * (180/math.pi)
         feet = []
         feet_current = []
         for name in ('left_foot_ground_contact', 'right_foot_ground_contact'):
@@ -111,6 +114,8 @@ class TransitionDiagnostics(MultiMotionDiagnostics):
                 self.trace.append(dict(
                     env_id=env_id, motion_id=int(e._getup_reference_motion_ids[env_id]), time_s=elapsed,
                     birth_frame=int(self.birth_frames[env_id]),
+                    leg_target_hold_active=bool(getattr(e, '_diagnostic_leg_target_hold', None).active[env_id])
+                        if getattr(e, '_diagnostic_leg_target_hold', None) is not None else False,
                     force_n=float(progress['assist_applied_force_n'][env_id]),
                     episode_force_n=float(progress['assist_episode_force_n'][env_id]),
                     height=float(poses[env_id, 2]-e.scene.env_origins[env_id, 2]),
@@ -125,6 +130,11 @@ class TransitionDiagnostics(MultiMotionDiagnostics):
                     feet_force_current_w_n=feet_current[env_id].tolist(),
                     feet_force_current_n=feet_current[env_id].norm(dim=-1).tolist(),
                     ankle_position_relative_pelvis_b_m=foot_relative_b[env_id].tolist(),
+                    ankle_position_w_m=(foot_pose[env_id, :, :3] - e.scene.env_origins[env_id]).tolist(),
+                    ankle_velocity_w_m_s=foot_velocity[env_id, :, :3].tolist(),
+                    ankle_angular_velocity_w_rad_s=foot_velocity[env_id, :, 3:].tolist(),
+                    ankle_rpy_w_deg=foot_rpy[env_id].tolist(),
+                    ankle_total_tilt_deg=(1 - 2 * foot_pose[env_id, :, 3:5].square().sum(-1)).clamp(-1, 1).acos().mul(180/math.pi).tolist(),
                     knee_angles=r.data.joint_pos.torch[env_id, self.knee_ids].tolist(),
                     feet_force=feet[env_id].tolist(),
                     ankle_height=(body[env_id, self.foot_ids, 2]-e.scene.env_origins[env_id, 2]).tolist(),
@@ -159,8 +169,10 @@ class TransitionDiagnostics(MultiMotionDiagnostics):
             rewards='Weighted task reward contributions including control dt; no AMP reward is computed in inference play.',
             targets='requested: scale+offset; position_clamped: hard limits; final: actual position/slew-limited command.',
             balance='RPY: xyzw ZYX degrees, positive pitch points +X down; Euler interpretation is limited near 90-degree pitch. Heading velocity: yaw-only frame +X forward/+Y left, horizontal. Angular velocity and ankle positions: full pelvis frame. Ankles are body origins, not contact points or COM projections. Current foot vectors are ground-filtered world-frame forces, not substep averages.',
+            feet='Ankle position uses world axes with environment origin subtracted; velocities and RPY use world axes. These are ankle rigid-body origins/orientations, not sole contact-point velocities or calibrated sole angles. Nonzero ankle speed with contact may reflect rolling/pivoting as well as slip; no slip classification is inferred.',
         )
         report['scenario'] = dict(force_levels=list(self.env.cfg.assist_force_levels),
+                                  leg_target_hold_after_s=getattr(getattr(self.env, '_diagnostic_leg_target_hold', None), 'after_seconds', None),
                                   birth_frames=self.birth_frames.tolist(),
                                   birth_mode='fixed_reference_frame_control' if bool((self.birth_frames != 0).any()) else 'frame_zero_evaluation',
                                   full_until_s=self.env.cfg.assist_full_until_s,
@@ -170,6 +182,9 @@ class TransitionDiagnostics(MultiMotionDiagnostics):
         if not self.complete or self.trace_printed:
             return
         print('\n[早期平衡时序] 各环境首回合前1.5秒，每0.1秒；脚力为当前采样。', flush=True)
+        hold_time = report['scenario']['leg_target_hold_after_s']
+        if hold_time is not None:
+            print(f'[控制覆盖对照] {hold_time:.2f}秒后保持髋膝目标；关节记录为覆盖后的命令，不是原策略输出。', flush=True)
         print('水平速度按骨盆朝向：+X前/+Y左；角速度按完整骨盆坐标。俯仰正值为前倾，大倾角时结合总倾角。', flush=True)
         print('踝位置是相对骨盆的刚体原点，不是接触点或质心投影。', flush=True)
         for env_id in range(self.env.num_envs):
@@ -192,6 +207,28 @@ class TransitionDiagnostics(MultiMotionDiagnostics):
                 print(f"    左踝相对xyz {ankle[0][0]:+.3f}/{ankle[0][1]:+.3f}/{ankle[0][2]:+.3f} m"
                       f" | 右踝 {ankle[1][0]:+.3f}/{ankle[1][1]:+.3f}/{ankle[1][2]:+.3f} m", flush=True)
         print('[早期平衡时序结束]', flush=True)
+        print('\n[足部与关节对照] 首回合0.3～1.0秒；左右脚均为踝刚体，角度不等于足底倾角。', flush=True)
+        print('世界坐标xyz；位置已减环境原点。接触时踝移动可能是滑动，也可能绕接触点转动。', flush=True)
+        for env_id in range(self.env.num_envs):
+            rows = [r for r in self.trace if r['env_id'] == env_id and .299999 <= r['time_s'] <= 1.000001]
+            if not rows: continue
+            print(f"环境 {env_id} | 动作 {rows[0]['motion_id']} | 出生帧 {rows[0]['birth_frame']}", flush=True)
+            for row in rows:
+                print(f"  t={row['time_s']:.2f} | 高度 {row['height']:.3f} m", flush=True)
+                for i, label in enumerate(('左脚', '右脚')):
+                    pos = '/'.join(f'{v:+.3f}' for v in row['ankle_position_w_m'][i])
+                    vel = '/'.join(f'{v:+.3f}' for v in row['ankle_velocity_w_m_s'][i])
+                    rpy = '/'.join(f'{v:+.1f}' for v in row['ankle_rpy_w_deg'][i])
+                    j = row['joints'][('left' if i == 0 else 'right') + '_ankle_pitch_joint']
+                    print(f"    {label} xyz {pos} m | 速度 {vel} m/s"
+                          f" | 滚/俯/偏 {rpy}° | 当前地面力 {row['feet_force_current_n'][i]:.0f} N"
+                          f" | 踝实际/目标 {j['position_rad']:+.3f}/{j['final_target_rad']:+.3f} rad", flush=True)
+                for joint_type, label in (('hip_pitch', '髋'), ('knee', '膝'), ('ankle_pitch', '踝')):
+                    left = row['joints']['left_' + joint_type + '_joint']
+                    right = row['joints']['right_' + joint_type + '_joint']
+                    print(f"    {label} 实际→最终目标：左 {left['position_rad']:+.3f}→{left['final_target_rad']:+.3f}"
+                          f" | 右 {right['position_rad']:+.3f}→{right['final_target_rad']:+.3f} rad", flush=True)
+        print('[足部与关节对照结束]', flush=True)
         print('\n[起身转换时序] 各环境首回合；概览双脚力取历史峰值，详细支撑力为当前采样。', flush=True)
         for env_id in range(self.env.num_envs):
             rows = [r for r in self.trace if r['env_id'] == env_id]

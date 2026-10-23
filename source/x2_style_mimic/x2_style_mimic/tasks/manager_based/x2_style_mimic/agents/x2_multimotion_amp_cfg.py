@@ -31,7 +31,7 @@ class MultiMotionAMPAlgorithmCfg(X2AMPAlgorithmCfg):
 
         "step_dt": 0.02,
         "num_steps": 5,
-        "style_reward_weight": 5.0,
+        "style_reward_weight": 10.0,
 
         "learning_rate": 1e-4,
         "gradient_penalty": 10.0,

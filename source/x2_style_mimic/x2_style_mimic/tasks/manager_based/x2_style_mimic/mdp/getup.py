@@ -268,6 +268,7 @@ def reset_from_motion_dataset(
     start_phase=0.0,
     end_phase=0.0,
     use_reference_velocity=False,           # 是否使用参考速度
+    zero_initial_frame_velocity=False,      # 是否将初始帧的速度置零
     height_offset=0.01,                     # 高度偏移
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     initial_frame_probability=0.5,
@@ -333,6 +334,11 @@ def reset_from_motion_dataset(
     if not use_reference_velocity:
         root_velocity.zero_()
         joint_vel.zero_()
+    elif zero_initial_frame_velocity:
+        # 混合出生：首帧清零，其他参考帧保留参考速度。
+        initial_mask = state["frame_ids"] == 0
+        root_velocity[initial_mask] = 0.0
+        joint_vel[initial_mask] = 0.0
 
     # 与当前仿真模型的硬限位对齐，并记录裁剪数量。
     limits = robot.data.joint_pos_limits.torch[env_ids]
@@ -401,11 +407,13 @@ def height_reward(
         - env.scene.env_origins[:, 2]
     )
 
+    # ==================== 高度进度奖励 ====================
     height_progress = (
         (height - minimum_height)
         / (target_height - minimum_height)
     ).clamp(0.0, 1.0)
 
+    # ==================== 姿态门控 ====================
     # 这是与世界竖直方向的点积，不是角度：
     # 直立约为 +1，水平约为 0，倒置约为 -1。
     upright = -robot.data.projected_gravity_b.torch[:, 2]
@@ -417,6 +425,7 @@ def height_reward(
         / (1.0 - inverted_cutoff)
     ).clamp(0.0, 1.0)
 
+    # ==================== 最终奖励 ====================
     return height_progress * orientation_gate
 
 def upright_reward(
@@ -428,20 +437,24 @@ def upright_reward(
     """根坐标系竖直向上时为 1，水平或倒置时为 0。"""
     robot = env.scene[asset_cfg.name]
 
+    # ==================== 状态量计算 ====================
     height = (
         robot.data.root_pos_w.torch[:, 2]
         - env.scene.env_origins[:, 2]
     )
 
+    # ==================== 高度门控 ====================
     height_gate = (
         (height - minimum_height)
         / (full_height - minimum_height)
     ).clamp(0.0, 1.0)
 
+    # ==================== 姿态奖励 ====================
     upright = (
         -robot.data.projected_gravity_b.torch[:, 2]
     ).clamp(0.0, 1.0)
 
+    # ==================== 最终奖励 ====================
     return height_gate * upright
 
 def rise_speed_penalty(
@@ -451,11 +464,13 @@ def rise_speed_penalty(
     """身体抬离地面时，惩罚过大的线速度和角速度。"""
     robot = env.scene[asset_cfg.name]
 
+    # ==================== 状态量计算 ====================
     height = (
         robot.data.root_pos_w.torch[:, 2]
         - env.scene.env_origins[:, 2]
     )
 
+    # ==================== 高度与姿态门控 ====================
     # 低于 0.25 m 不启用，到 0.40 m 完全启用。
     height_gate = ((height - 0.25) / 0.15).clamp(0.0, 1.0)
 
@@ -463,6 +478,7 @@ def rise_speed_penalty(
         -robot.data.projected_gravity_b.torch[:, 2]
     ).clamp(0.0, 1.0)
 
+    # ==================== 超限速度惩罚 ====================
     linear_speed = robot.data.root_lin_vel_w.torch.norm(dim=-1)
     angular_speed = robot.data.root_ang_vel_w.torch.norm(dim=-1)
 
@@ -470,6 +486,7 @@ def rise_speed_penalty(
     linear_excess = (linear_speed - 0.60).clamp_min(0.0)
     angular_excess = (angular_speed - 1.50).clamp_min(0.0)
 
+    # ==================== 最终惩罚 ====================
     return height_gate * upright_gate * (
         linear_excess.square()
         + 0.10 * angular_excess.square()
@@ -520,6 +537,7 @@ def getup_transition_reward(
 
     height = robot.data.root_pos_w.torch[:, 2] - env.scene.env_origins[:, 2]
 
+    # ==================== 高度门控和奖励 ====================
     # 0.25 m 开始介入，0.45 m 完全介入。
     # 避免直接要求俯卧状态伸膝
     gate = ((height - 0.25) / 0.20).clamp(0.0, 1.0)
@@ -528,6 +546,7 @@ def getup_transition_reward(
     # 从当前约 0.32 m 的停滞高度，到半蹲高度，始终有反馈。
     height_score = ((height - 0.25) / 0.28).clamp(0.0, 1.0)
 
+    # ==================== 姿态与关节奖励 ====================
     torso_q = robot.data.body_link_pose_w.torch[
         :, torso_cfg.body_ids, 3:7
     ]
@@ -547,6 +566,7 @@ def getup_transition_reward(
     # 不继续奖励把膝盖伸直。
     knee_score = (1.0 - knee_excess / 0.90).clamp(0.0, 1.0).mean(dim=-1)
 
+    # ==================== 支撑与离手门控 ====================
     feet_force = torch.stack(
         [
             current_ground_contact_force(env, cfg)
@@ -570,8 +590,21 @@ def getup_transition_reward(
     release_gate = release_gate.square() * (3.0 - 2.0 * release_gate)
     hand_release_score = torch.exp(-hand_force / 80.0)
 
-    # 分项相加：不要求所有转换条件同时成立才获得奖励。
-    return (
+    # ==================== 运动质量 ====================
+    root_up = (-robot.data.projected_gravity_b.torch[:, 2]).clamp(-1.0, 1.0)
+
+    velocity = robot.data.root_link_vel_w.torch
+    horizontal_speed_sq = velocity[:, :2].square().sum(dim=-1)
+    angular_speed_sq = velocity[:, 3:].square().sum(dim=-1)
+
+    # 不压制正常向上运动，只评价水平漂移和身体转动。
+    motion_score = torch.exp(
+        -horizontal_speed_sq / 0.60**2
+        -angular_speed_sq / 1.50**2
+    )
+
+    # ==================== 基础奖励组合 ====================
+    base_score = (
         0.40 * height_score
         + gate * (
             0.30 * torso_score
@@ -580,8 +613,81 @@ def getup_transition_reward(
         + 0.10 * release_gate * feet_gate * hand_release_score
     )
 
+    # ==================== 转换质量门控 ====================
+    # 身体较低时保留原转换引导。
+    # 抬高后逐渐要求运动平稳、双脚有接触。
+    # 保留非零底值，不禁止正常换支撑。
+    support_quality = 0.30 + 0.70 * feet_gate
+    motion_quality = 0.25 + 0.75 * motion_score
+    transition_quality = (
+        1.0 - gate
+        + gate * support_quality * motion_quality
+    )
 
+    # ==================== 联合奖励 ====================
+    # 联合奖励：抬高、姿态改善、双脚接触和低速同时出现。
+    # 高度低时几乎没有这项，避免奖励静止趴着。
+    root_pose_score = torch.exp(
+        -4.0 * (1.0 - root_up)
+    )
+    torso_pose_score = torch.exp(
+        -4.0 * (1.0 - torso_up)
+    )
+    balanced_score = (
+        height_score
+        * feet_gate
+        * motion_score
+        * root_pose_score
+        * torso_pose_score
+        * hand_release_score
+    )
 
+    # ==================== 最终奖励 ====================
+    # 分项相加：不要求所有转换条件同时成立才获得奖励。
+    return (
+        base_score * transition_quality
+        + 0.50 * balanced_score
+    )
+
+def transition_motion_penalty(
+    env,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+):
+    """抬起后惩罚过大的滚转/俯仰角速度和水平漂移。"""
+    robot = env.scene[asset_cfg.name]
+
+    # ==================== 状态量计算 ====================
+    pose = robot.data.root_link_pose_w.torch
+    velocity = robot.data.root_link_vel_w.torch
+
+    height = pose[:, 2] - env.scene.env_origins[:, 2]
+
+    # ==================== 高度门控 ====================
+    height_gate = ((height - 0.25) / 0.15).clamp(0.0, 1.0)
+    height_gate = height_gate.square() * (3.0 - 2.0 * height_gate)
+
+    # ==================== 速度超限惩罚 ====================
+    # 世界角速度转换到骨盆坐标系。
+    q = pose[:, 3:7]
+    xyz = q[:, :3]
+    w = q[:, 3:4]
+    omega_w = velocity[:, 3:]
+    cross = 2.0 * torch.cross(xyz, omega_w, dim=-1)
+    omega_b = omega_w - w * cross + torch.cross(xyz, cross, dim=-1)
+
+    # 允许一定的正常转换速度，只惩罚超出部分。
+    roll_pitch_speed = omega_b[:, :2].norm(dim=-1)
+    horizontal_speed = velocity[:, :2].norm(dim=-1)
+
+    angular_excess = (roll_pitch_speed - 1.50).clamp(0.0, 3.0)
+    linear_excess = (horizontal_speed - 0.60).clamp(0.0, 3.0)
+
+    # ==================== 最终惩罚 ====================
+    # 不乘直立门控：大倾角时也需要抑制快速翻转
+    return height_gate * (
+        angular_excess.square()
+        + 0.50 * linear_excess.square()
+    )
 
 def crouch_stability_reward(
     env,
@@ -598,8 +704,10 @@ def crouch_stability_reward(
     """身体抬起后，连续奖励稳定的半蹲高度、姿态、速度和支撑。"""
     robot = env.scene[asset_cfg.name]
 
+    # ==================== 状态量计算 ====================
     height = (robot.data.root_pos_w.torch[:, 2] - env.scene.env_origins[:, 2])
 
+    # ==================== 高度与姿态门控 ====================
     height_gate = ((height - minimum_height) / (full_height - minimum_height)).clamp(0.0, 1.0)
     # smoothstep 函数：平滑后的值 = x² × (3 - 2x)
     height_gate = height_gate.square() * (3.0 - 2.0 * height_gate)
@@ -608,6 +716,7 @@ def crouch_stability_reward(
     root_gate = ((root_up - 0.5) / 0.44).clamp(0.0, 1.0)
     root_gate = root_gate.square() * (3.0 - 2.0 * root_gate)
 
+    # ==================== 姿态质量 ====================
     torso_quat = robot.data.body_link_pose_w.torch[
         :, torso_cfg.body_ids, 3:7
     ]
@@ -627,6 +736,7 @@ def crouch_stability_reward(
         root_pose_score + torso_pose_score
     )
 
+    # ==================== 支撑与速度质量 ====================
     # 只在双脚都有地面接触时鼓励稳定。
     # 不要求左右脚承重相等。
     feet_score = torch.stack(
@@ -647,6 +757,7 @@ def crouch_stability_reward(
         -angular_speed_sq / angular_speed_scale**2
     )
 
+    # ==================== 高度与膝关节质量 ====================
     height_score = torch.exp(-((height - target_height) / 0.10).square())
 
     knee_angles = robot.data.joint_pos.torch[:, asset_cfg.joint_ids]
@@ -655,6 +766,7 @@ def crouch_stability_reward(
         -knee_excess.square().sum(dim=-1) / 0.25**2
     )
 
+    # ==================== 稳定性奖励组合 ====================
     quality = (
         0.15 * height_score
         + 0.25 * posture_score
@@ -663,6 +775,7 @@ def crouch_stability_reward(
         + 0.10 * knee_score
     )
 
+    # ==================== 最终奖励 ====================
     return height_gate * root_gate * quality
 
 
@@ -672,6 +785,7 @@ def head_contact_penalty(
     ground_sensor_cfgs: tuple[SceneEntityCfg, ...],
 ):
     """任一头部刚体发生明显接触时返回 1。"""
+    # ==================== 接触检测 ====================
     contact = torch.stack(
         [
             ground_contact_force(env, cfg) > force_threshold
@@ -680,16 +794,19 @@ def head_contact_penalty(
         dim=-1,
     )
 
+    # ==================== 最终惩罚 ====================
     # 两个头部刚体同时接触也只计一次。
     return contact.any(dim=-1).float()
 
 def success_reward(env):
     """读取本步成功终止标志，不重复更新成功计时。"""
+    # ==================== 成功奖励 ====================
     # 将布尔终止标志转换为浮点奖励：成功为 1，否则为 0。
     return env.termination_manager.get_term("success").float()
 
 def out_of_bounds_failure(env):
     """越界时触发一次；补偿奖励管理器的控制步长缩放。"""
+    # ==================== 越界失败惩罚 ====================
     return (
         env.termination_manager.get_term("out_of_bounds").float()
         / env.step_dt

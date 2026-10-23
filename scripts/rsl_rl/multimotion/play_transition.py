@@ -9,6 +9,7 @@ import argparse
 import math
 import types
 from transition_diagnostics import TransitionDiagnostics as MultiMotionDiagnostics
+from hold_targets import LegTargetHold
 import contextlib
 import importlib.metadata as metadata
 import os
@@ -75,6 +76,8 @@ parser.add_argument("--motion-id", type=int, default=-1,
                     help="Fix one manifest motion ID; -1 assigns all enabled motions cyclically at reset.")
 parser.add_argument("--birth-frames", type=int, nargs="+", default=None,
                     help="One fixed zero-based birth frame per manifest motion, in manifest order. Default: frame 0.")
+parser.add_argument("--hold-leg-targets-after", type=float, default=None,
+                    help="First-episode diagnostic: hold hip-pitch/knee final targets after this many seconds.")
 parser.add_argument("--eval-episodes-per-env", type=int, default=1,
                     help="Count the first K complete episodes per environment; 0 runs until interrupted.")
 parser.add_argument("--diagnostic-interval", type=float, default=10.0)
@@ -87,6 +90,11 @@ if not math.isfinite(args_cli.assist_force) or args_cli.assist_force < 0:
     parser.error("--assist-force must be finite and nonnegative")
 if args_cli.birth_frames is not None and any(frame < 0 for frame in args_cli.birth_frames):
     parser.error("--birth-frames must contain nonnegative frame indices")
+if args_cli.hold_leg_targets_after is not None:
+    if not math.isfinite(args_cli.hold_leg_targets_after) or args_cli.hold_leg_targets_after < 0:
+        parser.error("--hold-leg-targets-after must be finite and nonnegative")
+    if args_cli.eval_episodes_per_env != 1:
+        parser.error("Target hold requires --eval-episodes-per-env 1")
 if args_cli.eval_episodes_per_env < 0 or args_cli.diagnostic_interval <= 0:
     parser.error("Episode quota must be nonnegative and diagnostic interval positive")
 
@@ -270,6 +278,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             ),
         )
         interval_steps = max(1, round(args_cli.diagnostic_interval / dt))
+        target_hold = LegTargetHold(env.unwrapped, args_cli.hold_leg_targets_after, agent_cfg.clip_actions)
+        env.unwrapped._diagnostic_leg_target_hold = target_hold
+        if args_cli.hold_leg_targets_after is not None:
+            print(f"[髋膝保持对照] {args_cli.hold_leg_targets_after:.2f}秒后保持当时最终目标；"
+                  "踝与其他关节由策略控制。结果不代表原策略。", flush=True)
 
         # reset environment
         obs = env.get_observations()
@@ -282,9 +295,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 with torch.inference_mode():
                     # agent stepping
                     actions = policy(obs)
+                    actions = target_hold.apply(actions)
                     # env stepping
                     obs, _, dones, extras = env.step(actions)
                     diagnostics.update(dones, extras)
+                    target_hold.update(dones)
                     # reset recurrent states for episodes that have terminated
                     if version.parse(installed_version) >= version.parse("4.0.0"):
                         policy.reset(dones)
