@@ -29,11 +29,24 @@ def arguments():
     parser.add_argument("--report", type=Path, default=Path("logs/reference_replay/x2_getup_v0.json"))
     parser.add_argument("--fk_tolerance", type=float, default=.005, help="跨模拟器最大刚体位置误差阈值，m。")
     parser.add_argument("--orientation_tolerance_deg", type=float, default=.5, help="跨模拟器刚体方向误差阈值，度。")
-    add_launcher_args(parser)
+    parser.add_argument("--amp_tolerance", type=float, default=1e-3,
+                        help="Maximum absolute error across all scaled AMP features; body velocities use reference finite differences.")
+    # AppLauncher inspects the parser before the final CLI parse.
+    # Defer required custom arguments only during launcher registration.
+    required_args = [action for action in parser._actions if action.required]
+    for action in required_args:
+        action.required = False
+    try:
+        add_launcher_args(parser)
+    finally:
+        for action in required_args:
+            action.required = True
     parser.set_defaults(visualizer=["kit"])
     args, remaining = setup_preset_cli(parser)
     if not np.isfinite(args.slowdown) or args.slowdown <= 0 or not np.isfinite(args.fk_tolerance) or args.fk_tolerance <= 0:
         parser.error("slowdown 和 fk_tolerance 必须为有限正数")
+    if not np.isfinite(args.amp_tolerance) or args.amp_tolerance <= 0:
+        parser.error("amp_tolerance must be finite and positive")
     if args.max_frames is not None and args.max_frames <= 0:
         parser.error("max_frames 必须为正整数")
     if not np.isfinite(args.orientation_tolerance_deg) or args.orientation_tolerance_deg <= 0:
@@ -116,6 +129,7 @@ def main():
 
         from x2_style_mimic.tasks.manager_based.x2_style_mimic.mdp.amp import (
             AMP_KEY_BODY_NAMES,
+            AMP_STATE_DIM,
             AMPReferenceMotion,
             amp_observation,
         )
@@ -146,8 +160,20 @@ def main():
             "angular_velocity_scaled": slice(7, 10),
             "joint_position": slice(10, 39),
             "joint_velocity_scaled": slice(39, 68),
-            "key_position": slice(68, 80),
         }
+        offset = 68
+        for name, width in (
+            ("body_relative_position", 3),
+            ("body_relative_rotation_6d", 6),
+            ("body_relative_linear_velocity", 3),
+            ("body_relative_angular_scaled", 3),
+        ):
+            end = offset + width * len(AMP_KEY_BODY_NAMES)
+            amp_feature_blocks[name] = slice(offset, end)
+            offset = end
+        if offset != AMP_STATE_DIM:
+            raise ValueError("AMP feature blocks do not cover the current feature layout")
+
 
         amp_max_errors = {
             name: 0.0
@@ -159,11 +185,11 @@ def main():
         }
 
         # 阈值针对经过固定缩放后的特征值。
-        amp_tolerance = 1e-3
+        amp_tolerance = args.amp_tolerance
 
         print(
             "[AMP] Compare simulation and reference: "
-            "80 features per frame"
+            f"{AMP_STATE_DIM} features per frame"
         )
 
         try:
@@ -309,6 +335,8 @@ def main():
                 "position_mapping_passed": bool(count and body_errors.max() <= args.fk_tolerance),
                 "orientation_mapping_passed": bool(count and np.degrees(orientation_errors.max()) <= args.orientation_tolerance_deg),
                 "amp_feature_version": amp_reference.feature_version,
+                "amp_state_dim": AMP_STATE_DIM,
+                "body_velocity_reference": "finite differences of reference body poses",
                 "amp_feature_tolerance": amp_tolerance,
                 "amp_max_errors": amp_max_errors,
                 "amp_worst_frame": amp_worst_frame,

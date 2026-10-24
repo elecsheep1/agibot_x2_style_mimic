@@ -23,33 +23,12 @@ gym.register(
 )
 
 gym.register(
-    id="X2-Stand-v0",
-    entry_point="isaaclab.envs:ManagerBasedRLEnv",
-    disable_env_checker=True,
-    kwargs={
-        "env_cfg_entry_point":f"{__name__}.x2_stand_env_cfg:X2StandEnvCfg",
-        "rsl_rl_cfg_entry_point":f"{agents.__name__}.x2_getup_ppo_cfg:X2GetUpPPORunnerCfg",
-    },
-)
-
-gym.register(
-    id="X2-GetUp-v0",
-    entry_point=f"{__name__}.x2_getup_env:X2AMPGetUpEnv",
-    disable_env_checker=True,
-    kwargs={
-        "env_cfg_entry_point": f"{__name__}.x2_getup_env_cfg:X2GetUpEnvCfg",
-        "rsl_rl_cfg_entry_point": f"{agents.__name__}.x2_getup_ppo_cfg:X2GetUpPPORunnerCfg",
-        "amp_cfg_entry_point": f"{agents.__name__}.x2_getup_amp_cfg:X2GetUpAMPRunnerCfg",
-    },
-)
-
-gym.register(
     id="X2-Prone-MultiMotion-v0",
-    entry_point=f"{__name__}.x2_multimotion_getup_env:X2MultiMotionGetUpEnv",
+    entry_point=f"{__name__}.x2_getup_env:X2MultiMotionGetUpEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": f"{__name__}.x2_multimotion_getup_env_cfg:X2MultiMotionGetUpEnvCfg",
-        "rsl_rl_cfg_entry_point": f"{agents.__name__}.x2_multimotion_amp_cfg:X2MultiMotionAMPRunnerCfg",
-        "amp_cfg_entry_point": f"{agents.__name__}.x2_multimotion_amp_cfg:X2MultiMotionAMPRunnerCfg",
+        "env_cfg_entry_point": f"{__name__}.x2_getup_env_cfg:X2MultiMotionGetUpEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.x2_amp_cfg:X2MultiMotionAMPRunnerCfg",
+        "amp_cfg_entry_point": f"{agents.__name__}.x2_amp_cfg:X2MultiMotionAMPRunnerCfg",
     },
 )

@@ -20,7 +20,16 @@ def main():
     p.add_argument('--initial-velocity', choices=['zero', 'reference'], default='zero')
     p.add_argument('--spawn-lift', type=float, default=.002, help='Additional spawn height in meters.')
     p.add_argument('--report',type=Path,required=True)
-    add_launcher_args(p)
+    # AppLauncher inspects the parser before the final CLI parse.
+    # Defer required custom arguments only during launcher registration.
+    required_args = [action for action in p._actions if action.required]
+    for action in required_args:
+        action.required = False
+    try:
+        add_launcher_args(p)
+    finally:
+        for action in required_args:
+            action.required = True
     a,remaining = setup_preset_cli(p)
     sys.argv = [sys.argv[0]]+remaining
     if not np.isfinite(a.duration) or a.duration <= 0: p.error('duration must be positive')
@@ -31,8 +40,11 @@ def main():
         p.error('--frame requires hold mode and a valid frame index')
     if not np.isfinite(a.spawn_lift) or a.spawn_lift < 0:
         p.error('--spawn-lift must be finite and nonnegative')
-    cfg,_ = resolve_task_config('X2-GetUp-v0','')
+    cfg,_ = resolve_task_config('X2-Prone-MultiMotion-v0','')
     cfg.scene.num_envs = 1
+    if a.device is not None:
+        cfg.sim.device = a.device
+    standing = cfg.terminations.progress.params
     if not np.isclose(cfg.sim.dt*cfg.decimation,motion['metadata']['dt_s']):
         raise ValueError('Physics control dt and motion dt must match.')
     with launch_simulation(cfg,a):
@@ -82,7 +94,7 @@ def main():
             records = []; longest = streak = 0
             knees = [robot.joint_names.index(s+'_knee_joint') for s in ('left','right')]
             dt = cfg.sim.dt*cfg.decimation
-            count = round(a.duration/dt) if a.mode=='hold' else len(targets)
+            count = max(1, round(a.duration/dt)) if a.mode=='hold' else len(targets)
             with torch.inference_mode():
                 for step in range(count):
                     index = start if a.mode=='hold' else step
@@ -102,7 +114,19 @@ def main():
                             for s in ('left','right')]
                     head = max(float(scene.sensors[s].data.force_matrix_w_history.torch.norm(dim=-1).max())
                                for s in ('head_yaw_ground_contact','head_pitch_ground_contact'))
-                    valid = bool(height>.6 and cosine>np.cos(.35) and speed<.2 and spin<.5 and knee<.45 and min(foot)>5.)
+                    torso_id = names.index("torso_link")
+                    torso_q = robot.data.body_link_pose_w.torch[0, torso_id, 3:7]
+                    torso_q = torso_q / torso_q.norm().clamp_min(1e-8)
+                    torso_cos = float(1 - 2 * torso_q[:2].square().sum())
+                    valid = bool(
+                        height > standing["minimum_height"]
+                        and cosine > np.cos(standing["maximum_tilt"])
+                        and torso_cos > np.cos(standing["maximum_torso_tilt"])
+                        and speed < standing["maximum_linear_speed"]
+                        and spin < standing["maximum_angular_speed"]
+                        and knee < standing["maximum_knee_angle"]
+                        and min(foot) > standing["force_threshold"]
+                    )
                     streak = streak+1 if valid else 0;longest = max(longest,streak)
                     records.append(dict(t=(step+1)*dt,height=height,upright_cos=cosine,linear_speed=speed,
                         angular_speed=spin,knee_max=knee,foot_ground_forces=foot,head_ground_force=head,
@@ -118,6 +142,8 @@ def main():
                 initial_frame=start, initial_velocity=a.initial_velocity, spawn_lift_m=a.spawn_lift,
                 solver_type=cfg.sim.physics.solver_type,gravity=list(cfg.sim.gravity),
                 root_written_only_at_initialization=True,duration_s=count*dt,
+                standing_thresholds={key: value for key, value in standing.items()
+                                     if isinstance(value, (int, float))},
                 stable_last_second=bool(len(tail)*dt>=1. and all(r['valid_standing'] for r in tail)),
                 longest_valid_standing_s=longest*dt,final=records[-1],self_contact_pairs=pairs,samples=records,
                 interpretation='Open-loop PD test, no balance controller. Failure alone does not establish AMP infeasibility; success does not certify full dynamic feasibility.')

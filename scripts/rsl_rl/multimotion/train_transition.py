@@ -5,16 +5,6 @@
 
 """Multi-motion transition fine-tuning: fresh optimizers and configurable exploration reset."""
 
-import warnings
-
-warnings.warn(
-    "scripts/reinforcement_learning/rsl_rl/train.py is deprecated. Use "
-    "`./isaaclab.sh train --rl_library rsl_rl --task <TASK>` instead. "
-    "Example: `./isaaclab.sh train --rl_library rsl_rl --task Isaac-Cartpole-v0`.",
-    DeprecationWarning,
-    stacklevel=1,
-)
-
 import argparse
 import contextlib
 import importlib.metadata as metadata
@@ -87,7 +77,7 @@ parser.add_argument("--video", action="store_true", default=False, help="Record 
 parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
 parser.add_argument("--video_interval", type=int, default=2000, help="Interval between video recordings (in steps).")
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
-parser.add_argument("--task", type=str, default=None, help="Name of the task.")
+parser.add_argument("--task", type=str, default="X2-Prone-MultiMotion-v0", help="Name of the task.")
 parser.add_argument(
     "--agent", type=str, default="rsl_rl_cfg_entry_point", help="Name of the RL agent configuration entry point."
 )
@@ -285,10 +275,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         try:
             runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
             print(f"Training time: {round(time.time() - start_time, 2)} seconds")
-            # close the simulator
-            env.close()
         except KeyboardInterrupt:
             pass
+        finally:
+            env.close()
 
 
 if __name__ == "__main__":

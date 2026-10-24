@@ -1,18 +1,14 @@
 """新版多动作、五帧 AMP 训练配置。"""
 
 from isaaclab.utils.configclass import configclass
+from isaaclab_rl.rsl_rl import RslRlPpoAlgorithmCfg
 
-from .x2_getup_amp_cfg import (
-    X2AMPAlgorithmCfg,
-    X2GetUpAMPRunnerCfg,
-)
-
-from ..x2_multimotion_getup_env_cfg import MOTION_MANIFEST
+from .rsl_rl_ppo_cfg import PPORunnerCfg
+from ..x2_getup_env_cfg import MOTION_MANIFEST
 from ..x2_style_mimic_env_cfg import POLICY_JOINT_NAMES
 
-
 @configclass
-class MultiMotionAMPAlgorithmCfg(X2AMPAlgorithmCfg):
+class MultiMotionAMPAlgorithmCfg(RslRlPpoAlgorithmCfg):
     class_name = (
         "x2_style_mimic.algorithms.amp."
         "ppo_window:AMPWindowPPO"
@@ -43,7 +39,7 @@ class MultiMotionAMPAlgorithmCfg(X2AMPAlgorithmCfg):
 
 
 @configclass
-class X2MultiMotionAMPRunnerCfg(X2GetUpAMPRunnerCfg):
+class X2MultiMotionAMPRunnerCfg(PPORunnerCfg):
     experiment_name = "x2_prone_multimotion"
     run_name = "multimotion_v1"
     resume = False

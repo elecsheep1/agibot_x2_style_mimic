@@ -4,6 +4,10 @@
 import torch
 from torch import nn
 
+from ...tasks.manager_based.x2_style_mimic.mdp.amp import (
+    AMP_STATE_DIM,
+)
+
 
 class AMPDiscriminator(nn.Module):
     """独立于 Actor/Critic 的动作风格判别器。"""
@@ -16,8 +20,8 @@ class AMPDiscriminator(nn.Module):
     ):
         super().__init__()
 
-        if (reference_states.ndim != 2 or reference_states.shape[1] != 80):
-            raise ValueError("参考状态必须为 [帧数, 80]")
+        if (reference_states.ndim != 2 or reference_states.shape[1] != AMP_STATE_DIM):
+            raise ValueError(f"参考状态必须为 [帧数, {AMP_STATE_DIM}]")
 
         if (len(reference_states) < 2 or not torch.isfinite(reference_states).all().item()):
             raise ValueError("参考状态数量或数值错误")
@@ -40,7 +44,7 @@ class AMPDiscriminator(nn.Module):
 
         # 相邻两帧输入
         self.network = nn.Sequential(
-            nn.Linear(160, 256),
+            nn.Linear(2 * AMP_STATE_DIM, 256),
             nn.ELU(),
             nn.Linear(256, 128),
             nn.ELU(),
@@ -57,8 +61,9 @@ class AMPDiscriminator(nn.Module):
 
     def normalize(self, pairs):
         """相邻两帧分别使用同一套单帧统计量进行归一化。"""
-        if pairs.ndim != 2 or pairs.shape[1] != 160:
-            raise ValueError("判别器输入必须为 [批量, 160]")
+        expected_dim = 2 * AMP_STATE_DIM
+        if pairs.ndim != 2 or pairs.shape[1] != expected_dim:
+            raise ValueError(f"判别器输入必须为 [批量, {expected_dim}]")
 
         # 单帧统计量都是 80 维，两帧输入则需要 160 维，所以重复两遍：
         mean = self.state_mean.repeat(2)
@@ -192,7 +197,7 @@ class AMPWindowDiscriminator(AMPDiscriminator):
         self.num_steps = num_steps
         self.state_dim = reference_states.shape[-1]
 
-        # 五帧 × 80 维 = 400 维输入。
+        # 窗口长度 × 单帧特征维度。
         self.network[0] = nn.Linear(
             self.num_steps * self.state_dim,
             256,

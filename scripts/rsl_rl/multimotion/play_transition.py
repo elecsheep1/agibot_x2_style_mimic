@@ -59,7 +59,7 @@ parser.add_argument(
     "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
 )
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
-parser.add_argument("--task", type=str, default=None, help="Name of the task.")
+parser.add_argument("--task", type=str, default="X2-Prone-MultiMotion-v0", help="Name of the task.")
 parser.add_argument(
     "--agent", type=str, default="rsl_rl_cfg_entry_point", help="Name of the RL agent configuration entry point."
 )
@@ -80,6 +80,7 @@ parser.add_argument("--hold-leg-targets-after", type=float, default=None,
                     help="First-episode diagnostic: hold hip-pitch/knee final targets after this many seconds.")
 parser.add_argument("--eval-episodes-per-env", type=int, default=1,
                     help="Count the first K complete episodes per environment; 0 runs until interrupted.")
+parser.add_argument("--amp-window-report", type=str, default=None, help="Save full AMP windows (.pt) and phase analysis (.json).")
 parser.add_argument("--diagnostic-interval", type=float, default=10.0)
 parser.add_argument("--diagnostic-report", type=str, default=None)
 parser.add_argument("--external_callback", default=None, help="Fully qualified path to an externally defined callback.")
@@ -286,6 +287,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
         # reset environment
         obs = env.get_observations()
+        amp_audit = None
+        if args_cli.amp_window_report:
+            from amp_window_audit import AMPWindowAudit
+            amp_audit = AMPWindowAudit(env.unwrapped, runner.alg, args_cli.amp_window_report, resume_path, args_cli.eval_episodes_per_env)
         timestep = 0
         # simulate environment
         try:
@@ -294,10 +299,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 # run everything in inference mode
                 with torch.inference_mode():
                     # agent stepping
+                    if amp_audit is not None:
+                        amp_audit.begin(obs)
                     actions = policy(obs)
                     actions = target_hold.apply(actions)
                     # env stepping
                     obs, _, dones, extras = env.step(actions)
+                    if amp_audit is not None:
+                        amp_audit.advance(dones, extras)
                     diagnostics.update(dones, extras)
                     target_hold.update(dones)
                     # reset recurrent states for episodes that have terminated
@@ -323,6 +332,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         finally:
             if diagnostics.reported_steps != diagnostics.steps:
                 diagnostics.report()
+            if amp_audit is not None:
+                amp_audit.close()
             diagnostics.close()
             env.close()
 

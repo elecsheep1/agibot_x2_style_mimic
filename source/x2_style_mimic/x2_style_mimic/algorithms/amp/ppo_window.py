@@ -13,6 +13,9 @@ from .replay_buffer import AMPWindowReplayBuffer
 from x2_style_mimic.tasks.manager_based.x2_style_mimic.mdp.motion_dataset import (
     MotionDataset,
 )
+from ...tasks.manager_based.x2_style_mimic.mdp.amp import (
+    AMP_FEATURE_VERSION,
+)
 
 class AMPWindowPPO(PPO):
 
@@ -246,7 +249,7 @@ class AMPWindowPPO(PPO):
         checkpoint = super().save()
 
         checkpoint["amp_window"] = {
-            "feature_version": "x2_amp_v0_80_window_v1",
+            "feature_version": AMP_FEATURE_VERSION + "_window_v1",
             "num_steps": self.amp_num_steps,
             "reference_sha256": self._amp_reference_hash,
             "settings": deepcopy(self.amp_cfg),
@@ -277,7 +280,7 @@ class AMPWindowPPO(PPO):
 
             if (
                 amp["feature_version"]
-                != "x2_amp_v0_80_window_v1"
+                != AMP_FEATURE_VERSION + "_window_v1"
                 or amp["num_steps"] != self.amp_num_steps
                 or amp["reference_sha256"]
                 != self._amp_reference_hash
