@@ -278,19 +278,44 @@ class AMPWindowPPO(PPO):
             if amp is None:
                 raise ValueError("该 checkpoint 没有新版五帧 AMP 状态")
 
+            # 仅允许改变风格奖励权重，其余 AMP 设置仍严格检查。
+            saved_settings = deepcopy(amp["settings"])
+            current_settings = deepcopy(self.amp_cfg)
+
+            saved_weight = saved_settings.pop("style_reward_weight")        # pop 出保存的风格奖励权重，剩余设置用于检查一致性。
+            current_weight = current_settings.pop("style_reward_weight")
+
             if (
                 amp["feature_version"]
                 != AMP_FEATURE_VERSION + "_window_v1"
                 or amp["num_steps"] != self.amp_num_steps
                 or amp["reference_sha256"]
                 != self._amp_reference_hash
-                or amp["settings"] != self.amp_cfg
+                or saved_settings != current_settings
             ):
                 raise ValueError("参考数据、窗口长度或 AMP 配置不一致")
 
+            if saved_weight != current_weight:
+                print(
+                    "[AMP resume] style_reward_weight: "
+                        f"{saved_weight} -> {current_weight}"
+                )
         load_iteration = super().load(
             loaded_dict, load_cfg, strict
         )
+
+        # 恢复优化器时，同步 PPO 自适应学习率状态。
+        restore_optimizer = (
+            load_cfg is None
+            or load_cfg.get("optimizer", False)
+        )
+        if restore_optimizer:
+            self.learning_rate = float(self.optimizer.param_groups[0]["lr"])
+            print(
+                "[PPO resume] Restored learning rate: "
+                f"{self.learning_rate:.8g}"
+            )
+
 
         if load_amp:
             self.amp_discriminator.load_state_dict(
