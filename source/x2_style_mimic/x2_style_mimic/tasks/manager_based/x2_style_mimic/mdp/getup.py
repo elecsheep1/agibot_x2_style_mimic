@@ -430,7 +430,14 @@ def out_of_bounds(
     )
 
 class GetUpSuccess(ManagerTermBase):
-    """站立条件连续满足指定时长后，才判定成功。"""
+    """站立条件连续满足指定时长后，才判定起身成功。
+
+    该管理器项返回一个形状为 ``[num_envs]`` 的布尔张量：每个元素对应
+    一个并行环境是否已经成功起身。成功不是某一帧瞬间满足条件，而是要求
+    机器人在连续多个仿真步内同时满足高度、姿态、速度、膝关节和足部接触
+    等条件。这样可以避免机器人短暂弹起、倾倒过程中经过直立姿态，或尚未
+    稳定时被误判为起身成功。
+    """
 
     def __init__(self, cfg, env):
         super().__init__(cfg, env)
@@ -532,7 +539,16 @@ class GetUpSuccess(ManagerTermBase):
             dim=-1,
         ).all(dim=-1)
 
-        # 六项条件必须同时成立，才认为当前仿真步处于有效站立状态。
+        # 七项条件必须同时成立，当前仿真步才算“有效站立”：
+        # 1. 根节点高度超过 minimum_height；
+        # 2. 机器人整体倾斜角小于 maximum_tilt；
+        # 3. 躯干倾斜角小于 maximum_torso_tilt（未配置 torso_cfg 时默认通过）；
+        # 4. 根节点线速度小于 maximum_linear_speed；
+        # 5. 根节点角速度小于 maximum_angular_speed；
+        # 6. 左右膝关节角度均小于 maximum_knee_angle；
+        # 7. 所有配置的足部接触传感器都检测到足够大的接触力。
+        #
+        # 只有 valid 连续保持 hold_time 秒，最终才会判定为起身成功。
         valid = (
             (height > minimum_height)
             & upright

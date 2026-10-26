@@ -321,6 +321,13 @@ class X2MultiMotionGetUpEnvCfg(X2StyleMimicEnvCfg):
     assist_curriculum_window: int = 64
     assist_curriculum_threshold: float = 0.80
 
+    # AMP 奖励按连续稳定时长平滑退出。
+    amp_gate_fade_start_s: float = 0.10
+    amp_gate_fade_end_s: float = 0.50
+
+    # 超过该连续稳定时长的状态，不进入 AMP 策略样本窗口。
+    amp_policy_sample_max_hold_s: float = 0.10
+
     def __post_init__(self):
         super().__post_init__()
 

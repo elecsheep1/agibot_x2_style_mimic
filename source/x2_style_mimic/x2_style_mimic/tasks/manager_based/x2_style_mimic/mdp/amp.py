@@ -54,12 +54,12 @@ def inverse_rotate(quaternion, vectors):
     return vectors - w * t + torch.cross(xyz, t, dim=-1)
 
 def relative_body_features(
-    root_pos_w,
-    root_quat_xyzw,
-    root_lin_vel_w,
-    root_ang_vel_w,
-    body_pose_w,
-    body_vel_w,
+    root_pos_w,             # 根刚体在世界坐标中的位置
+    root_quat_xyzw,         # 根刚体在世界坐标中的四元数
+    root_lin_vel_w,         # 根刚体在世界坐标中的线速度
+    root_ang_vel_w,         # 根刚体在世界坐标中的角速度
+    body_pose_w,            # 关键刚体在世界坐标中的位置和四元数
+    body_vel_w,             # 关键刚体在世界坐标中的线速度和角速度
 ):
     """在完整骨盆坐标系中计算相对位姿和运动。
 
@@ -107,10 +107,10 @@ def relative_body_features(
     )  # [N, B, 3]
 
     return (
-        relative_position,
-        relative_rotation_6d,
-        relative_linear,
-        relative_angular,
+        relative_position,          # 关键刚体相对位置
+        relative_rotation_6d,       # 关键刚体相对旋转矩阵6d
+        relative_linear,            # 关键刚体相对线速度
+        relative_angular,           # 关键刚体相对角速度
     )
 
 def build_amp_state(

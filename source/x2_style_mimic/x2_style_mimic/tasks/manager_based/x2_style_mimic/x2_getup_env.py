@@ -1,6 +1,7 @@
 """新版多动作环境：保留 AMP 终止状态，并输出独立成功统计。"""
 
 import torch
+import math
 
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab.managers import SceneEntityCfg
@@ -105,6 +106,27 @@ class X2MultiMotionGetUpEnv(X2AMPGetUpEnv):
             for key, value in snapshot.items()
         }
         extras["getup_progress"]["motion_ids"] = motion_ids
+
+        # 使用终止判断阶段保存的真实步后快照。
+        # 即使本步自动重置，也不会读到下一回合的稳定时长。
+        fade_start = float(self.cfg.amp_gate_fade_start_s)
+        fade_end = float(self.cfg.amp_gate_fade_end_s)
+        sample_max_hold = float(self.cfg.amp_policy_sample_max_hold_s)
+        # 在运行时检查，覆盖 Hydra 最终传入的参数。
+        if not (
+            math.isfinite(fade_start)
+            and math.isfinite(fade_end)
+            and 0.0 <= fade_start < fade_end
+        ):
+            raise ValueError("AMP 门控要求 0 <= fade_start_s < fade_end_s,且参数必须为有限数")
+        if not (math.isfinite(sample_max_hold) and sample_max_hold >= 0.0):
+            raise ValueError("AMP 策略样本最大连续稳定时长要求 >= 0.0,且参数必须为有限数")
+        hold = snapshot["hold_seconds"]
+        blend = ((hold - fade_start) / (fade_end - fade_start)).clamp(0.0, 1.0)
+        blend = blend.square() * (3.0 - 2.0 * blend)  # smoothstep
+
+        extras["amp_reward_gate"] = 1.0 - blend
+        extras["amp_policy_sample_mask"] = (hold <= sample_max_hold)
 
         return (
             observations,
