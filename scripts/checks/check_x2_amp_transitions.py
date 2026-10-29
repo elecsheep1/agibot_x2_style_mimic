@@ -1,5 +1,10 @@
 """检查统一起身任务的五帧 AMP、终止状态捕获和跨回合隔离，不更新策略。"""
 
+# Support direct execution: python scripts/<category>/<tool>.py.
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
+
 import argparse
 import sys
 

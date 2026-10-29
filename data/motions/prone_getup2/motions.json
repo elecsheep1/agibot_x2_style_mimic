@@ -1,0 +1,20 @@
+{
+  "motions": [
+    {
+      "file": "x2_getup_v0_50hz.npz",
+      "weight": 1.0
+    },
+    {
+      "file": "x2_getup_139_16_umr_v1_50hz.npz",
+      "weight": 1.0
+    },
+    {
+      "file": "x2_getup_139_17_umr_v1_50hz.npz",
+      "weight": 1.0
+    },
+    {
+      "file": "x2_getup_140_02_umr_v1_50hz.npz",
+      "weight": 1.0
+    }
+  ]
+}

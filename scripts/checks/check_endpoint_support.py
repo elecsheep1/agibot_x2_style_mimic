@@ -1,4 +1,9 @@
 """Free-root PD endpoint support audit. No policy, assistance, or automatic resets."""
+
+# Support direct execution: python scripts/<category>/<tool>.py.
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
 import argparse
 import json
 from pathlib import Path
@@ -8,7 +13,6 @@ import time
 import numpy as np
 import torch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from isaaclab_tasks.utils import add_launcher_args, launch_simulation, resolve_task_config, setup_preset_cli
 
 BODY_NAMES = (
@@ -32,7 +36,7 @@ def main():
     sys.argv = [sys.argv[0]] + remaining
     if not np.isfinite(a.duration) or a.duration <= 0: p.error('duration must be positive')
     if not np.isfinite(a.spawn_lift) or a.spawn_lift < 0: p.error('spawn-lift must be nonnegative')
-    from x2_motion_utils import load_motion
+    from common.x2_motion_utils import load_motion
     manifest = a.manifest.resolve()
     entries = json.loads(manifest.read_text())['motions']
     paths = [(manifest.parent/e['file']).resolve() for e in entries if e.get('weight', 1)>0]

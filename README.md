@@ -31,9 +31,14 @@
 ```text
 agibot_x2_style_mimic/
 ├── scripts/
-│   ├── zero_agent.py
-│   ├── prepare_x2_contact_reports.py
-│   └── rsl_rl/                     # 训练和回放入口
+│   ├── retarget/                   # 重定向结果转换
+│   ├── checks/                     # 质量检查与分析
+│   ├── repair/                     # 动作修复与编辑
+│   ├── replay/                     # 参考动作回放与渲染
+│   ├── common/                     # 公共模块
+│   ├── assets/                     # 资产接触报告工具
+│   ├── examples/                   # 环境列表与零/随机动作示例
+│   └── rsl_rl/                     # 策略训练和推理入口
 └── source/x2_style_mimic/
     └── x2_style_mimic/
         ├── assets/
@@ -69,7 +74,7 @@ git lfs pull
 
 ```bash
 python -m pip install -e source/x2_style_mimic
-python scripts/list_envs.py
+python scripts/examples/list_envs.py
 ```
 
 USD/USDA 等模型文件由 Git LFS 管理。必须下载为真实资源，不能只保留 LFS 指针；同时保留全部 payloads 文件及相对路径。
@@ -93,7 +98,7 @@ USD/USDA 等模型文件由 Git LFS 管理。必须下载为真实资源，不�
 项目提供补充脚本。在关闭使用该资产的仿真进程后执行：
 
 ```bash
-python scripts/prepare_x2_contact_reports.py --viz none
+python scripts/assets/prepare_x2_contact_reports.py --viz none
 ```
 
 该命令会修改本地 `source/x2_style_mimic/x2_style_mimic/assets/robots/x2_ultra/x2_ultra/x2_ultra.usda` 入口层，为遍历到的刚体补充 PhysX 接触报告 API。脚本已加入项目，修复效果仍需通过下述零动作检查确认；如果重新转换并覆盖资产，需要重新检查报告是否齐全。
@@ -125,7 +130,7 @@ velocity_command(3) → base_ang_vel(3) → projected_gravity(3)
 ## 零动作检查
 
 ```bash
-python scripts/zero_agent.py \
+python scripts/examples/zero_agent.py \
     --task Template-X2-Style-Mimic-v0 \
     --num_envs 4 \
     --viz kit

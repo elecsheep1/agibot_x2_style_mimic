@@ -3,7 +3,12 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Script to run an environment with zero action agent."""
+"""Script to an environment with random action agent."""
+
+# Support direct execution: python scripts/<category>/<tool>.py.
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
 
 import argparse
 import contextlib
@@ -24,7 +29,7 @@ from isaaclab_tasks.utils import (
 )
 
 # add argparse arguments
-parser = argparse.ArgumentParser(description="Zero agent for Isaac Lab environments.")
+parser = argparse.ArgumentParser(description="Random agent for Isaac Lab environments.")
 parser.add_argument(
     "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
 )
@@ -38,11 +43,10 @@ args_cli, hydra_args = setup_preset_cli(parser)
 sys.argv = [sys.argv[0]] + hydra_args
 
 import x2_style_mimic.tasks  # noqa: F401
-MAX_STEPS = 100
 
 
 def main():
-    """Zero actions agent with Isaac Lab environment."""
+    """Random actions agent with Isaac Lab environment."""
 
     torch.manual_seed(42)
 
@@ -59,36 +63,13 @@ def main():
         # create environment
         env = gym.make(args_cli.task, cfg=env_cfg)
 
-        ''' 诊断修改开始 '''
-        robot = env.unwrapped.scene["robot"]
-        print("\n===== X2 bodies =====")
-        for index, name in enumerate(robot.body_names):
-            print(f"{index:2d}: {name}")
-
-        contact_sensor = env.unwrapped.scene["contact_forces"]
-
-        print("\n===== Contact sensor bodies =====")
-        for index, name in enumerate(contact_sensor.body_names):
-            print(f"{index:2d}: {name}")
-
-        print("\n===== Contact sensor rigid-body paths =====")
-        for path in contact_sensor.body_physx_view.prim_paths:
-            print(path)
-
-        print("\n===== Contact force history shape =====")
-        print(contact_sensor.data.net_forces_w_history.torch.shape)
-
-        ''' 诊断修改结束 '''
-
         # print info (this is vectorized environment)
         print(f"[INFO]: Gym observation space: {env.observation_space}")
         print(f"[INFO]: Gym action space: {env.action_space}")
         # reset environment
         env.reset()
         # simulate environment
-        # keep running while any visualizer is open, otherwise fall back to MAX_STEPS
         sim = env.unwrapped.sim
-        actions = torch.zeros(env.action_space.shape, device=env.unwrapped.device)
         while True:
             if sim.visualizers:
                 # visualizer mode: run until the visualizer window is closed
@@ -96,8 +77,11 @@ def main():
                     break
             # run everything in inference mode
             with torch.inference_mode():
+                # sample actions from -1 to 1
+                actions = 2 * torch.rand(env.action_space.shape, device=env.unwrapped.device) - 1
                 # apply actions
                 env.step(actions)
+
         # close the simulator
         env.close()
 

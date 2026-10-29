@@ -1,5 +1,10 @@
 """零物理步回放的显示层同步；只写当前内存 stage，不保存机器人资产。"""
 
+# Support direct execution: python scripts/<category>/<tool>.py.
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
+
 import numpy as np
 from pxr import Gf, Usd, UsdGeom, UsdPhysics
 

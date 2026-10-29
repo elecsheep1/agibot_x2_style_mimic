@@ -1,5 +1,10 @@
 """X2 参考数据约定；只依赖 NumPy，可在 gmr 环境离线使用。"""
 
+# Support direct execution: python scripts/<category>/<tool>.py.
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
+
 import ast
 import json
 from pathlib import Path
@@ -7,7 +12,7 @@ from pathlib import Path
 import numpy as np
 
 
-PROJECT_DIR = Path(__file__).resolve().parents[1]
+PROJECT_DIR = Path(__file__).resolve().parents[2]
 ENV_CFG_FILE = (
     PROJECT_DIR / "source/x2_style_mimic/x2_style_mimic/tasks/manager_based"
     / "x2_style_mimic/x2_style_mimic_env_cfg.py"

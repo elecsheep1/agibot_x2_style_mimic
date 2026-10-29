@@ -1,4 +1,9 @@
 """Free-root diagnostic; does not turn an open-loop failure into a reference rejection."""
+
+# Support direct execution: python scripts/<category>/<tool>.py.
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
 import argparse
 import json
 from pathlib import Path
@@ -34,7 +39,7 @@ def main():
     sys.argv = [sys.argv[0]]+remaining
     if not np.isfinite(a.duration) or a.duration <= 0: p.error('duration must be positive')
     if a.report.exists(): p.error('Choose a new report path; existing report protected.')
-    from x2_motion_utils import load_motion
+    from common.x2_motion_utils import load_motion
     motion = load_motion(a.motion)
     if a.frame is not None and (a.mode != 'hold' or not 0 <= a.frame < len(motion['time_s'])):
         p.error('--frame requires hold mode and a valid frame index')

@@ -17,6 +17,7 @@ class AMPDiscriminator(nn.Module):
         reference_states,       # 整段参考动作提取出来的 AMP 状态
         learning_rate=1e-4,     # 判别器的学习率，默认 0.0001
         gradient_penalty=10.0,  # 梯度惩罚的强度，默认 10
+        weight_decay=0.0,       # 权重衰减，默认 0
     ):
         super().__init__()
 
@@ -57,6 +58,7 @@ class AMPDiscriminator(nn.Module):
         self.optimizer = torch.optim.Adam(
             self.network.parameters(),
             lr=learning_rate,
+            weight_decay=weight_decay,
         )
 
     def normalize(self, pairs):
@@ -183,6 +185,7 @@ class AMPWindowDiscriminator(AMPDiscriminator):
         num_steps=5,        # 滑动窗口长度
         learning_rate=1e-4,
         gradient_penalty=10.0,
+        weight_decay=0.0,       # 权重衰减，默认 0
     ):
         if num_steps < 2:
             raise ValueError("滑动窗口长度必须至少为 2")
@@ -207,6 +210,7 @@ class AMPWindowDiscriminator(AMPDiscriminator):
         self.optimizer = torch.optim.Adam(
             self.network.parameters(),
             lr=learning_rate,
+            weight_decay=weight_decay,
         )
 
     def normalize(self, windows):

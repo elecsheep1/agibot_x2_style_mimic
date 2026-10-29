@@ -73,6 +73,7 @@ class AMPWindowPPO(PPO):
             num_steps=self.amp_num_steps,
             learning_rate=amp_cfg["learning_rate"],
             gradient_penalty=amp_cfg["gradient_penalty"],
+            weight_decay=amp_cfg.get("weight_decay", 0.0)
         )
         self.amp_buffer = AMPWindowReplayBuffer(
             capacity=amp_cfg["buffer_capacity"],
@@ -98,6 +99,10 @@ class AMPWindowPPO(PPO):
         self._amp_gated_style_sum = 0.0     # 初始化门控风格奖励统计累计值。
         self._amp_reward_gate_sum = 0.0     # 初始化门控奖励统计累计值。
         self._amp_policy_window_sum = 0.0   # 初始化策略样本窗口统计累计值。
+        # 每轮采集期间，“未淡出阶段”的判别分数和原始奖励。
+        self._amp_getup_scores = []         # 记录符合条件的判别器分数
+        self._amp_getup_rewards = []        # 记录符合条件的原始风格奖励
+        self._amp_diag_valid_count = 0      # 记录符合条件的 AMP 窗口数量，用于计算 getup_window_fraction
 
     def act(self, obs):
         """内部保存 AMP 状态，外部返回 PPO 动作。"""
@@ -189,10 +194,23 @@ class AMPWindowPPO(PPO):
             dtype=rewards.dtype,
             device=self.device,
         )
-        if bool(valid_mask.any()):
-            raw_style[valid_mask] = self.amp_discriminator.style_reward(
-                windows[valid_mask]
-            )
+        self._amp_diag_valid_count += int(valid_mask.sum().item())          # 累计本步所有环境的有效 AMP 窗口数量
+        hold = extras["getup_progress"]["hold_seconds"].to(self.device)     # 每个环境当前连续稳定时长
+        if hold.shape != valid_mask.shape:
+            raise ValueError("hold_seconds 与 AMP 窗口数量不一致")
+        if not bool(torch.isfinite(hold).all()):
+            raise ValueError("hold_seconds 包含 NaN/Inf")
+        if bool(valid_mask.any()):                           # 至少有一个环境积累了完整窗口
+            with torch.no_grad():
+                # 与原奖励计算使用同一次判别器前向。
+                scores = self.amp_discriminator(windows[valid_mask])                # 计算完整窗口的判别器分数
+                rewards_raw = (1.0 - 0.25 * (scores - 1.0).square()).clamp(0.0, 1.0)# 计算完整窗口的原始风格奖励
+                raw_style[valid_mask] = rewards_raw.to(raw_style.dtype)             # 仅在完整窗口处写入原始风格奖励
+                # 固定 0.10 s，方便不同门控时间实验之间比较。
+                getup_mask = hold[valid_mask] <= 0.10                               # 仅在连续稳定时长不超过 0.10 s 的窗口处记录判别器分数和原始奖励
+                if bool(getup_mask.any()):
+                    self._amp_getup_scores.append(scores[getup_mask].detach().float().clone())
+                    self._amp_getup_rewards.append(rewards_raw[getup_mask].detach().float().clone())
         gated_style = raw_style * reward_gate
         # 缓冲区只保存完整、未跨回合的窗口。
         self.amp_buffer.add(windows, buffer_mask)
@@ -275,6 +293,32 @@ class AMPWindowPPO(PPO):
         metrics["amp/valid_window_ratio"] = self._amp_valid_sum / count
         metrics["amp/buffer_size"] = float(self.amp_buffer.size)
         metrics["amp/discriminator_updates"] = float(completed_updates)
+        if self._amp_getup_scores:
+            scores = torch.cat(self._amp_getup_scores)
+            rewards_raw = torch.cat(self._amp_getup_rewards)
+            quantiles = torch.quantile(
+                scores,
+                scores.new_tensor([0.10, 0.50, 0.90]),
+            )
+            metrics["amp/getup_score_p10"] = quantiles[0].item()
+            metrics["amp/getup_score_p50"] = quantiles[1].item()
+            metrics["amp/getup_score_p90"] = quantiles[2].item()
+            metrics["amp/getup_reward_raw"] = rewards_raw.mean().item()
+            metrics["amp/getup_zero_reward_fraction"] = (rewards_raw <= 0.0).float().mean().item()
+            getup_count = scores.numel()
+        else:
+            # 没有符合条件的窗口时，NaN 表示缺失，不能误记为零。
+            for name in (
+                "getup_score_p10",
+                "getup_score_p50",
+                "getup_score_p90",
+                "getup_reward_raw",
+                "getup_zero_reward_fraction",
+            ):
+                metrics[f"amp/{name}"] = float("nan")
+            getup_count = 0
+        metrics["amp/getup_window_count"] = float(getup_count)
+        metrics["amp/getup_window_fraction"] = (getup_count / max(self._amp_diag_valid_count, 1))
 
         self._amp_task_sum = 0.0
         self._amp_style_sum = 0.0
@@ -284,6 +328,10 @@ class AMPWindowPPO(PPO):
         self._amp_gated_style_sum = 0.0
         self._amp_reward_gate_sum = 0.0
         self._amp_policy_window_sum = 0.0
+
+        self._amp_getup_scores.clear()
+        self._amp_getup_rewards.clear()
+        self._amp_diag_valid_count = 0
 
         # 不清空历史：同一回合允许跨 PPO 迭代继续积累。
         return metrics
@@ -342,7 +390,6 @@ class AMPWindowPPO(PPO):
             # 仅允许改变风格奖励权重，其余 AMP 设置仍严格检查。
             saved_settings = deepcopy(amp["settings"])
             current_settings = deepcopy(self.amp_cfg)
-
             # 旧 checkpoint 没有门控字段，按关闭处理。
             gate_defaults = {
                 "reward_gate_enabled": False,
@@ -351,11 +398,14 @@ class AMPWindowPPO(PPO):
             for key, default in gate_defaults.items():
                 saved_settings.setdefault(key, default)
                 current_settings.setdefault(key, default)
+            saved_settings.setdefault("weight_decay", 0.0)
+            current_settings.setdefault("weight_decay", 0.0)
             # 明确允许在恢复时改变的设置。
             override_keys = (
                 "style_reward_weight",
                 "reward_gate_enabled",
                 "policy_sample_gate_enabled",
+                "weight_decay",
             )
             changes = []
             for key in override_keys:
@@ -395,7 +445,6 @@ class AMPWindowPPO(PPO):
                 f"{self.learning_rate:.8g}"
             )
 
-
         if load_amp:
             self.amp_discriminator.load_state_dict(
                 amp["discriminator"],
@@ -408,6 +457,12 @@ class AMPWindowPPO(PPO):
                 self.amp_discriminator.optimizer.load_state_dict(
                     amp["optimizer"]
                 )
+            # optimizer.load_state_dict 会恢复旧参数组设置，
+            # 因此最后重新应用当前实验指定的权重衰减。
+            weight_decay = float(self.amp_cfg.get("weight_decay", 0.0))
+            for group in self.amp_discriminator.optimizer.param_groups:
+                group["weight_decay"] = weight_decay
+            print(f"[AMP resume] discriminator weight_decay={weight_decay:g}")
 
         restore_curriculum = (
             load_cfg is None
@@ -418,9 +473,7 @@ class AMPWindowPPO(PPO):
         if restore_curriculum and controller.curriculum_enabled:
             curriculum = loaded_dict.get("assist_curriculum")
             if curriculum is None:
-                raise ValueError(
-                    "checkpoint 缺少辅助力课程状态"
-                )
+                raise ValueError("checkpoint 缺少辅助力课程状态")
             controller.load_state_dict(curriculum)
 
         # 历史与回放缓冲区不存档，恢复后重新积累。
@@ -437,5 +490,8 @@ class AMPWindowPPO(PPO):
         self._amp_gated_style_sum = 0.0
         self._amp_reward_gate_sum = 0.0
         self._amp_policy_window_sum = 0.0
+        self._amp_getup_scores.clear()
+        self._amp_getup_rewards.clear()
+        self._amp_diag_valid_count = 0
 
         return load_iteration

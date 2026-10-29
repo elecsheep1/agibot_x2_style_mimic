@@ -33,7 +33,7 @@ MOTION_MANIFEST = (
     PROJECT_DIR
     / "data"
     / "motions"
-    / "prone_getup"
+    / "prone_getup2"
     / "motions.json"
 )
 _ROBOT_PATH = "{ENV_REGEX_NS}/Robot/Geometry/base_link"
@@ -190,7 +190,7 @@ class GetUpEventsCfg:
 class GetUpRewardsCfg:
     standing = RewTerm(
         func=getup_mdp.standing_quality_reward,
-        weight=10.0,
+        weight=20.0,
         params={
             "torso_cfg": SceneEntityCfg(
                 "robot",
@@ -324,7 +324,6 @@ class X2MultiMotionGetUpEnvCfg(X2StyleMimicEnvCfg):
     # AMP 奖励按连续稳定时长平滑退出。
     amp_gate_fade_start_s: float = 0.10
     amp_gate_fade_end_s: float = 0.50
-
     # 超过该连续稳定时长的状态，不进入 AMP 策略样本窗口。
     amp_policy_sample_max_hold_s: float = 0.10
 

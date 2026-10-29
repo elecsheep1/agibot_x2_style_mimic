@@ -1,5 +1,10 @@
 """为 X2 嵌套刚体补充 PhysX 接触报告，修改本地 USD 入口层。"""
 
+# Support direct execution: python scripts/<category>/<tool>.py.
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
+
 import argparse
 from pathlib import Path
 
@@ -20,7 +25,7 @@ from pxr import PhysxSchema, Usd, UsdPhysics
 
 
 def main() -> None:
-    project_root = Path(__file__).resolve().parents[1]
+    project_root = Path(__file__).resolve().parents[2]
 
     usd_path = (
         project_root

@@ -10,8 +10,8 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from convert_x2_reference import convert_reference
-from x2_motion_utils import joint_indices, load_motion, policy_joint_names
+from retarget.convert_x2_reference import convert_reference
+from common.x2_motion_utils import joint_indices, load_motion, policy_joint_names
 
 
 class ReferenceConversionTests(unittest.TestCase):
@@ -23,7 +23,7 @@ class ReferenceConversionTests(unittest.TestCase):
         self.names = ["head_pitch_joint"] + list(reversed(self.policy)) + ["head_yaw_joint"]
         times = np.arange(7) / 30
         # 经过 180°，且等价四元数符号交替；正确结果仍应是恒定正向角速度。
-        quats = Rotation.from_euler("z", 170 + 150*times, degrees=True).as_quat()
+        quats = Rotation.from_euler("z", (170 + 150*times)[:, None], degrees=True).as_quat()
         quats[1::2] *= -1
         joints = np.tile(np.arange(31)*.001, (7, 1))
         joints[:, self.names.index("left_wrist_pitch_joint")] = times

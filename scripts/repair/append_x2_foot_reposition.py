@@ -3,6 +3,11 @@
 This exports kinematic reference states, not a balance controller or measured contacts.
 Run with the gmr Python environment. Existing inputs and outputs are protected.
 """
+
+# Support direct execution: python scripts/<category>/<tool>.py.
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
 import argparse
 import hashlib
 import json
@@ -14,8 +19,8 @@ from scipy.optimize import least_squares
 from scipy.spatial import ConvexHull
 from scipy.spatial.transform import Rotation as R
 
-from convert_x2_reference import angular_velocity_world, export_mujoco_fk
-from x2_motion_utils import load_motion
+from retarget.convert_x2_reference import angular_velocity_world, export_mujoco_fk
+from common.x2_motion_utils import load_motion
 
 
 def smooth(u):

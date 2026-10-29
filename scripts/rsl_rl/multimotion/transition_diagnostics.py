@@ -1,11 +1,15 @@
 """Capture the first 10 s of each environment before automatic resets."""
+
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
 import json
 import math
 from pathlib import Path
 
 import torch
 from diagnostics import MultiMotionDiagnostics
-from analyze_references import analyze
+from checks.analyze_references import analyze
 
 
 def inverse_rotate_xyzw(q, vector):

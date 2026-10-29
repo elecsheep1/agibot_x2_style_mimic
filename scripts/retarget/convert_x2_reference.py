@@ -1,5 +1,10 @@
 """把冻结 GMR 参考转换为固定频率 NPZ；不启动 Isaac Lab、不运行物理。"""
 
+# Support direct execution: python scripts/<category>/<tool>.py.
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
+
 import argparse
 import hashlib
 import json
@@ -9,7 +14,7 @@ import pickle
 import numpy as np
 from scipy.spatial.transform import Rotation, Slerp
 
-from x2_motion_utils import joint_indices, load_motion, policy_joint_names
+from common.x2_motion_utils import joint_indices, load_motion, policy_joint_names
 
 
 def interpolate_columns(times, source_times, values):

@@ -13,6 +13,11 @@ All the environments are registered in the `x2_style_mimic` extension. They star
 with `Isaac` in their name.
 """
 
+# Support direct execution: python scripts/<category>/<tool>.py.
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
+
 """Launch Isaac Sim Simulator first."""
 
 import argparse

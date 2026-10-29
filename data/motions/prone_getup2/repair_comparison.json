@@ -1,0 +1,193 @@
+[
+  {
+    "motion": "x2_getup_v0_50hz.npz",
+    "body_angular_acceleration_rad_s2": [
+      {
+        "body": "left_wrist_roll_link",
+        "interval_s": [
+          2.6,
+          3.1
+        ],
+        "before": 329.9063753986721,
+        "after": 37.98360404615471
+      },
+      {
+        "body": "right_hip_roll_link",
+        "interval_s": [
+          2.9,
+          3.5
+        ],
+        "before": 291.08260430196646,
+        "after": 47.30862361939174
+      }
+    ],
+    "max_joint_change_rad": 0.6403034925460815,
+    "max_root_translation_change_m": 0.057030826807022095,
+    "feet": {
+      "left": {
+        "locked_height_min_m": 0.0019904054854488528,
+        "locked_height_max_m": 0.002007774912404341,
+        "locked_max_slide_speed_m_s": 0.00023281177802918579,
+        "locked_max_xy_drift_m": 3.0769538917631725e-06,
+        "locked_max_tilt_deg": 0.003800948494731218
+      },
+      "right": {
+        "locked_height_min_m": 0.001978483585461423,
+        "locked_height_max_m": 0.0020063253221645387,
+        "locked_max_slide_speed_m_s": 0.0005744307380210239,
+        "locked_max_xy_drift_m": 8.01065217601022e-06,
+        "locked_max_tilt_deg": 0.003268093851744839
+      }
+    }
+  },
+  {
+    "motion": "x2_getup_139_16_umr_v1_50hz.npz",
+    "body_angular_acceleration_rad_s2": [
+      {
+        "body": "right_elbow_link",
+        "interval_s": [
+          0,
+          0.2
+        ],
+        "before": 210.76735183204224,
+        "after": 26.52464025450247
+      },
+      {
+        "body": "left_wrist_roll_link",
+        "interval_s": [
+          4,
+          4.6
+        ],
+        "before": 147.38528043627795,
+        "after": 25.26588674172013
+      },
+      {
+        "body": "right_wrist_roll_link",
+        "interval_s": [
+          6,
+          6.4
+        ],
+        "before": 131.28864108147488,
+        "after": 24.791272929934724
+      }
+    ],
+    "max_joint_change_rad": 0.6832518577575684,
+    "max_root_translation_change_m": 0.08043936640024185,
+    "feet": {
+      "left": {
+        "locked_height_min_m": 0.0019938585741417535,
+        "locked_height_max_m": 0.002003684806995397,
+        "locked_max_slide_speed_m_s": 0.00011384332808823707,
+        "locked_max_xy_drift_m": 1.2971843638529048e-06,
+        "locked_max_tilt_deg": 0.001691243704886065
+      },
+      "right": {
+        "locked_height_min_m": 0.0019925494916516228,
+        "locked_height_max_m": 0.0020032002903842593,
+        "locked_max_slide_speed_m_s": 0.00010488647153265783,
+        "locked_max_xy_drift_m": 1.343409398029419e-06,
+        "locked_max_tilt_deg": 0.001755613152415059
+      }
+    }
+  },
+  {
+    "motion": "x2_getup_139_17_umr_v1_50hz.npz",
+    "body_angular_acceleration_rad_s2": [
+      {
+        "body": "right_elbow_link",
+        "interval_s": [
+          0,
+          0.2
+        ],
+        "before": 223.54716091160407,
+        "after": 19.08350134056577
+      },
+      {
+        "body": "left_elbow_link",
+        "interval_s": [
+          3,
+          4
+        ],
+        "before": 12.627825790940513,
+        "after": 12.627825790940513
+      },
+      {
+        "body": "right_wrist_roll_link",
+        "interval_s": [
+          8.3,
+          8.9
+        ],
+        "before": 201.89368751000208,
+        "after": 59.999614121868525
+      }
+    ],
+    "max_joint_change_rad": 0.5153515338897705,
+    "max_root_translation_change_m": 0.07613900303840637,
+    "feet": {
+      "left": {
+        "locked_height_min_m": 0.0019925882671113964,
+        "locked_height_max_m": 0.0020024336386382418,
+        "locked_max_slide_speed_m_s": 0.00019113666650225907,
+        "locked_max_xy_drift_m": 2.462504821288337e-06,
+        "locked_max_tilt_deg": 0.0029734463904419065
+      },
+      "right": {
+        "locked_height_min_m": 0.0019935555357724804,
+        "locked_height_max_m": 0.0020041035047962995,
+        "locked_max_slide_speed_m_s": 0.00020441442320323535,
+        "locked_max_xy_drift_m": 2.361197060796088e-06,
+        "locked_max_tilt_deg": 0.0020070306330670024
+      }
+    }
+  },
+  {
+    "motion": "x2_getup_140_02_umr_v1_50hz.npz",
+    "body_angular_acceleration_rad_s2": [
+      {
+        "body": "left_wrist_roll_link",
+        "interval_s": [
+          1.6,
+          2.1
+        ],
+        "before": 260.5745219583697,
+        "after": 28.898707605283803
+      },
+      {
+        "body": "left_hip_roll_link",
+        "interval_s": [
+          3.8,
+          4.3
+        ],
+        "before": 115.99893193850649,
+        "after": 62.72095462698908
+      },
+      {
+        "body": "torso_link",
+        "interval_s": [
+          5,
+          7
+        ],
+        "before": 2.2867637486448547,
+        "after": 2.2867637486448547
+      }
+    ],
+    "max_joint_change_rad": 0.5339609980583191,
+    "max_root_translation_change_m": 0.10902963578701019,
+    "feet": {
+      "left": {
+        "locked_height_min_m": 0.0019978884555925435,
+        "locked_height_max_m": 0.0020007702625027173,
+        "locked_max_slide_speed_m_s": 9.0912394252371e-05,
+        "locked_max_xy_drift_m": 1.094221395883692e-06,
+        "locked_max_tilt_deg": 0.0015496088111372824
+      },
+      "right": {
+        "locked_height_min_m": 0.001997064178187573,
+        "locked_height_max_m": 0.0020008101353673107,
+        "locked_max_slide_speed_m_s": 0.00013471167513007376,
+        "locked_max_xy_drift_m": 1.5162574204415762e-06,
+        "locked_max_tilt_deg": 0.0014372893267949691
+      }
+    }
+  }
+]

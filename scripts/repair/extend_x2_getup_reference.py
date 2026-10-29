@@ -1,4 +1,9 @@
 """Append a foot-constrained stand-up candidate; never overwrite the source."""
+
+# Support direct execution: python scripts/<category>/<tool>.py.
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
 import argparse
 import hashlib
 import json
@@ -9,8 +14,8 @@ import numpy as np
 from scipy.optimize import least_squares
 from scipy.spatial.transform import Rotation as R
 
-from convert_x2_reference import angular_velocity_world, export_mujoco_fk
-from x2_motion_utils import load_motion
+from retarget.convert_x2_reference import angular_velocity_world, export_mujoco_fk
+from common.x2_motion_utils import load_motion
 
 
 def blend(p0, p1, v0, t, duration):

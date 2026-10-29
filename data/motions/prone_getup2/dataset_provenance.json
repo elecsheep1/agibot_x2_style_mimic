@@ -1,0 +1,30 @@
+[
+  {
+    "file": "x2_getup_v0_50hz.npz",
+    "source_sha256": "43d482463b0d4379aa52b0e8c587f132ffc2f7d80fd641b405a3e2f9546276e4",
+    "repaired_sha256": "14ebcbae73817df679c522ef30f2ff2c10583606c677a56d77d125d40a96da9b",
+    "frames": 346,
+    "fps": 50.0
+  },
+  {
+    "file": "x2_getup_139_16_umr_v1_50hz.npz",
+    "source_sha256": "68ff79292a46f036b901fedc326df867d1329fdfa4bd7a9aa3e26de188edabf5",
+    "repaired_sha256": "be16479a497183e01e82f9e1e45af59f450cda45866adc57de8b36e8562503be",
+    "frames": 544,
+    "fps": 50.0
+  },
+  {
+    "file": "x2_getup_139_17_umr_v1_50hz.npz",
+    "source_sha256": "79b05d64d2b2662bbf0a5e8ce8929c8d4207ae57df7740c455619a0d23ef183b",
+    "repaired_sha256": "496612543fcd1a24ab8343f04b9f83a4306234bad85a8e062e20ebb3f6e4bd0a",
+    "frames": 599,
+    "fps": 50.0
+  },
+  {
+    "file": "x2_getup_140_02_umr_v1_50hz.npz",
+    "source_sha256": "a9410c16b363f339938a96a4d3913b14aef24a0220062ce30f08cc0f46589909",
+    "repaired_sha256": "b7973fe14c016f67de4fd1f6da148880afd1158e30204ea4b0f807357cbfd2df",
+    "frames": 391,
+    "fps": 50.0
+  }
+]

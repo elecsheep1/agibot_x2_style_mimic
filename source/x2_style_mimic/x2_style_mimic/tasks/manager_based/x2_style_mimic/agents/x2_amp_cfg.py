@@ -30,11 +30,12 @@ class MultiMotionAMPAlgorithmCfg(RslRlPpoAlgorithmCfg):
         "style_reward_weight": 30.0,
 
         # 环境通过 extras 提供门控；默认关闭，保持原版 AMP 行为。
-        "reward_gate_enabled": False,
-        "policy_sample_gate_enabled": False,
+        "reward_gate_enabled": True,
+        "policy_sample_gate_enabled": True,
 
-        "learning_rate": 1e-4,
+        "learning_rate": 5e-5,
         "gradient_penalty": 10.0,
+        "weight_decay": 0.0001,
 
         "buffer_capacity": 100_000,
         "updates_per_iteration": 4,

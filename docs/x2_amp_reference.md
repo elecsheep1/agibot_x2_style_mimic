@@ -16,7 +16,7 @@ NPZ 以 `allow_pickle=False` 读取。它是后续 AMP 数据加载器的基础�
 在项目根目录，使用已有 gmr 环境运行（需要 NumPy、SciPy、MuJoCo，不启动 Isaac Sim）：
 
 ```bash
-python scripts/convert_x2_reference.py \
+python scripts/retarget/convert_x2_reference.py \
     --input ../../retarget/motion_data/retargeted/x2_getup_v0_20261018/reference.pkl \
     --output data/motions/x2_getup_v0_50hz.npz
 ```
@@ -47,7 +47,7 @@ python scripts/convert_x2_reference.py \
 激活 `env_isaaclab_6_0`，在项目根目录运行：
 
 ```bash
-python scripts/replay_x2_reference.py \
+python scripts/replay/replay_x2_reference.py \
     --motion data/motions/x2_getup_v0_50hz.npz \
     --viz kit --slowdown 2 --loop
 ```
@@ -55,7 +55,7 @@ python scripts/replay_x2_reference.py \
 无窗口、完整一遍核对：
 
 ```bash
-python scripts/replay_x2_reference.py \
+python scripts/replay/replay_x2_reference.py \
     --motion data/motions/x2_getup_v0_50hz.npz \
     --viz none
 ```

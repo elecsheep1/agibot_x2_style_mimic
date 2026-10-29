@@ -1,5 +1,10 @@
 """Isaac Lab 参考姿态回放与跨模拟器 FK 检查，不运行策略或动力学跟踪。"""
 
+# Support direct execution: python scripts/<category>/<tool>.py.
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
+
 from types import SimpleNamespace
 import argparse
 import json
@@ -12,7 +17,7 @@ import torch
 
 from isaaclab_tasks.utils import add_launcher_args, launch_simulation, resolve_task_config, setup_preset_cli
 
-from x2_motion_utils import (
+from common.x2_motion_utils import (
     joint_indices,
     load_motion,
     policy_joint_names,
@@ -82,7 +87,7 @@ def main():
     with launch_simulation(env_cfg, args):
         import isaaclab.sim as sim_utils
         from isaaclab.scene import InteractiveScene
-        from x2_reference_visuals import ReferenceVisualSync
+        from common.x2_reference_visuals import ReferenceVisualSync
 
         sim = sim_utils.SimulationContext(env_cfg.sim)
         sim.set_setting("/rtx/hydra/readTransformsFromFabricInRenderDelegate", False)

@@ -71,6 +71,10 @@ parser.add_argument("--eval-episodes-per-env", type=int, default=4,
                     help="Count the first K complete episodes per environment; 0 runs until interrupted.")
 parser.add_argument("--diagnostic-interval", type=float, default=10.0)
 parser.add_argument("--diagnostic-report", type=str, default=None)
+parser.add_argument("--policy-only", action="store_true",
+                    help="Load policy/critic without the AMP discriminator; for inference across reference/config changes.")
+parser.add_argument("--motion-manifest", type=str, default=None,
+                    help="Reference manifest for evaluation births (also used to initialize AMP reference data).")
 parser.add_argument("--external_callback", default=None, help="Fully qualified path to an externally defined callback.")
 cli_args.add_rsl_rl_args(parser)
 add_launcher_args(parser)
@@ -146,6 +150,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
         # Full get-up evaluation must not inherit mixed training births.
         reset_params = env_cfg.events.reset_from_reference.params
+        if args_cli.motion_manifest:
+            manifest_path = os.path.abspath(args_cli.motion_manifest)
+            if not os.path.isfile(manifest_path):
+                raise FileNotFoundError(manifest_path)
+            reset_params["manifest_file"] = manifest_path
+            agent_cfg.algorithm.amp_cfg["manifest_file"] = manifest_path
+            print(f"[验收参考] {manifest_path}", flush=True)
         reset_params.update(transition_frame_ranges=None, start_phase=0.0, end_phase=0.0)
         print("[验收出生] 所有动作从第0帧开始，训练混合出生已关闭。", flush=True)
 
@@ -181,9 +192,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
         else:
             raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
+        if args_cli.policy_only:
+            print("[纯策略回放] 不加载 AMP 判别器；仅验收策略动作与起身成功率。", flush=True)
         runner.load(resume_path, load_cfg={
             "actor": True, "critic": True, "optimizer": False,
-            "iteration": False, "rnd": False, "amp": True,
+            "iteration": False, "rnd": False, "amp": not args_cli.policy_only,
             "assist_curriculum": False,
         })
 

@@ -1,0 +1,520 @@
+{
+  "schema_version": 1,
+  "status": "amp_reference_candidate_not_final_discriminator_schema",
+  "source": "/home/panda/robotics_ws/retarget/UMR/data/motions/x2_13916_umr_hiplimits_v1/reference.pkl",
+  "source_sha256": "94b5821d3eac2b9f2b497a73f038dc6b7817a1344a88542ec02f566c9c2c2b27",
+  "source_fps": 30.0,
+  "source_frames": 327,
+  "source_duration_s": 10.866666666666667,
+  "fps": 50.0,
+  "dt_s": 0.02,
+  "duration_s": 10.86,
+  "quat_order": "xyzw",
+  "root_frame": "pelvis",
+  "isaac_root_frame": "base_link",
+  "up_axis": "Z",
+  "root_transform": "identity; verify with cross-simulator FK",
+  "position_units": "m",
+  "joint_units": "rad",
+  "angular_velocity_units": "rad/s",
+  "velocity_method": "finite differences on resampled positions; world relative rotation increments",
+  "interpolation": "linear joint/root positions; shortest-path SLERP root rotation",
+  "ground_z": 0.0,
+  "loop": false,
+  "mujoco_xml": "/home/panda/robotics_ws/retarget/UMR/data/motions/x2_13916_umr_hiplimits_v1/robot.xml",
+  "local_repair": {
+    "mode": "joint temporal arms chain optimization",
+    "interval_s": [
+      5.7,
+      6.7
+    ],
+    "sigma_s": 0.07,
+    "joint_names": [
+      "left_shoulder_pitch_joint",
+      "left_shoulder_roll_joint",
+      "left_shoulder_yaw_joint",
+      "left_elbow_joint",
+      "left_wrist_yaw_joint",
+      "left_wrist_pitch_joint",
+      "left_wrist_roll_joint",
+      "right_shoulder_pitch_joint",
+      "right_shoulder_roll_joint",
+      "right_shoulder_yaw_joint",
+      "right_elbow_joint",
+      "right_wrist_yaw_joint",
+      "right_wrist_pitch_joint",
+      "right_wrist_roll_joint"
+    ],
+    "max_joint_change_rad": 0.0827958613385266,
+    "targets": "smoothed world chain poses",
+    "reference": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/logs/retarget_quality/prone_getup2_build/2_stage1_arms.npz",
+    "iterations": [
+      {
+        "iteration": 0,
+        "max_update": 0.08335233656561322
+      },
+      {
+        "iteration": 1,
+        "max_update": 0.008372247294786625
+      },
+      {
+        "iteration": 2,
+        "max_update": 0.0009101458254871381
+      },
+      {
+        "iteration": 3,
+        "max_update": 0.0027341379805010213
+      },
+      {
+        "iteration": 4,
+        "max_update": 0.00040578065812030186
+      },
+      {
+        "iteration": 5,
+        "max_update": 3.245333299070055e-05
+      },
+      {
+        "iteration": 6,
+        "max_update": 4.4477133453232204e-05
+      },
+      {
+        "iteration": 7,
+        "max_update": 3.7797254983750264e-05
+      },
+      {
+        "iteration": 8,
+        "max_update": 5.976102150664908e-05
+      },
+      {
+        "iteration": 9,
+        "max_update": 4.898806893764707e-05
+      },
+      {
+        "iteration": 10,
+        "max_update": 5.8289655999358564e-05
+      },
+      {
+        "iteration": 11,
+        "max_update": 3.9361833890999565e-05
+      }
+    ],
+    "limitation": "kinematic/native geometry only; requires visual review and independent audit",
+    "source": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/logs/retarget_quality/prone_getup2_build/2_stage1_arms.npz",
+    "source_sha256": "c215051ecbeca7082b29fc2cd739aa48254133f294952e8edaa7f720046a2750",
+    "output": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/logs/retarget_quality/prone_getup2_build/2_stage2_arms.npz"
+  },
+  "support_repair": {
+    "source": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/logs/retarget_quality/prone_getup2_build/2_stage2_arms.npz",
+    "source_sha256": "304770532150d9643748f028a530e968cc05bf6d03786a2125ad44463748a43a",
+    "output": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/data/motions/prone_getup2/x2_getup_139_16_umr_v1_50hz.npz",
+    "anchors": [
+      {
+        "side": "left",
+        "start_s": 5.8,
+        "fully_locked_s": 6.2,
+        "ankle_position_w": [
+          -0.20518621451098146,
+          -1.05471366270499,
+          0.07500000000000002
+        ],
+        "yaw_rad": 2.15139376911699
+      },
+      {
+        "side": "right",
+        "start_s": 5.7,
+        "fully_locked_s": 6.1000000000000005,
+        "ankle_position_w": [
+          0.2361951203551581,
+          -0.9944065949207165,
+          0.07500000000000001
+        ],
+        "yaw_rad": 1.2275339257920375
+      }
+    ],
+    "anchor_report": null,
+    "edit_interval": null,
+    "knee_floor": 0.0,
+    "smooth_interval": [
+      5.7,
+      10.86
+    ],
+    "smooth_strength": 800.0,
+    "min_ground_m": 0.0017999881715632868,
+    "min_self_m": 0.0,
+    "feet": {
+      "left": {
+        "locked_height_min_m": 0.0019938585741417535,
+        "locked_height_max_m": 0.002003684806995397,
+        "locked_max_slide_speed_m_s": 0.00011384332808823707,
+        "locked_max_xy_drift_m": 1.2971843638529048e-06,
+        "locked_max_tilt_deg": 0.001691243704886065
+      },
+      "right": {
+        "locked_height_min_m": 0.0019925494916516228,
+        "locked_height_max_m": 0.0020032002903842593,
+        "locked_max_slide_speed_m_s": 0.00010488647153265783,
+        "locked_max_xy_drift_m": 1.343409398029419e-06,
+        "locked_max_tilt_deg": 0.001755613152415059
+      }
+    },
+    "max_leg_correction_rad": 0.6832518661806164,
+    "max_root_correction_m": 0.07929023405430338,
+    "iterations": [
+      {
+        "iteration": 0,
+        "min_ground_m": 0.0017999962849975792,
+        "min_self_m": 0,
+        "max_locked_pose_error": 0.664478660955513,
+        "max_update": 0.1499999999503045
+      },
+      {
+        "iteration": 1,
+        "min_ground_m": 0.0018000002682782706,
+        "min_self_m": 0,
+        "max_locked_pose_error": 0.518793773069357,
+        "max_update": 0.07499999987922415
+      },
+      {
+        "iteration": 2,
+        "min_ground_m": 0.001800000403035365,
+        "min_self_m": 0,
+        "max_locked_pose_error": 0.45105193017157885,
+        "max_update": 0.07499999925066969
+      },
+      {
+        "iteration": 3,
+        "min_ground_m": 0.0018000093204894596,
+        "min_self_m": 0,
+        "max_locked_pose_error": 0.393310701203252,
+        "max_update": 0.07499999873553653
+      },
+      {
+        "iteration": 4,
+        "min_ground_m": 0.001807734509727002,
+        "min_self_m": 0,
+        "max_locked_pose_error": 0.30863294552159576,
+        "max_update": 0.07499999889377107
+      },
+      {
+        "iteration": 5,
+        "min_ground_m": 0.0018056488806474508,
+        "min_self_m": 0,
+        "max_locked_pose_error": 0.22040353249527422,
+        "max_update": 0.07499999614225722
+      },
+      {
+        "iteration": 6,
+        "min_ground_m": 0.001803576933040743,
+        "min_self_m": 0,
+        "max_locked_pose_error": 0.13451360727594416,
+        "max_update": 0.07477098745585681
+      },
+      {
+        "iteration": 7,
+        "min_ground_m": 0.0018032363969348736,
+        "min_self_m": 0,
+        "max_locked_pose_error": 0.06742654976808943,
+        "max_update": 0.12329244151877584
+      },
+      {
+        "iteration": 8,
+        "min_ground_m": 0.00180021427380173,
+        "min_self_m": 0,
+        "max_locked_pose_error": 0.0065586405303590745,
+        "max_update": 0.03433684575171482
+      },
+      {
+        "iteration": 9,
+        "min_ground_m": 0.001800345150034609,
+        "min_self_m": 0,
+        "max_locked_pose_error": 0.00019611577898966977,
+        "max_update": 0.04077462557133399
+      },
+      {
+        "iteration": 10,
+        "min_ground_m": 0.0018000357688751122,
+        "min_self_m": 0,
+        "max_locked_pose_error": 0.0004054148696368956,
+        "max_update": 0.04178589883994631
+      },
+      {
+        "iteration": 11,
+        "min_ground_m": 0.0018000016812945762,
+        "min_self_m": 0,
+        "max_locked_pose_error": 0.0003634999790923126,
+        "max_update": 0.0074796167447515015
+      },
+      {
+        "iteration": 12,
+        "min_ground_m": 0.0018000632444422808,
+        "min_self_m": 0,
+        "max_locked_pose_error": 3.337906028509172e-05,
+        "max_update": 0.00993086918518249
+      },
+      {
+        "iteration": 13,
+        "min_ground_m": 0.0018000251486933226,
+        "min_self_m": 0,
+        "max_locked_pose_error": 3.336031692445321e-05,
+        "max_update": 0.024091044133626362
+      },
+      {
+        "iteration": 14,
+        "min_ground_m": 0.0018000298103475103,
+        "min_self_m": 0,
+        "max_locked_pose_error": 7.197928244848106e-05,
+        "max_update": 0.007027989487343511
+      },
+      {
+        "iteration": 15,
+        "min_ground_m": 0.0018000182872500202,
+        "min_self_m": 0,
+        "max_locked_pose_error": 3.3104022937828097e-05,
+        "max_update": 0.004654522126642267
+      },
+      {
+        "iteration": 16,
+        "min_ground_m": 0.0018000019464823923,
+        "min_self_m": 0,
+        "max_locked_pose_error": 3.2997240511023216e-05,
+        "max_update": 0.0029578091205591846
+      },
+      {
+        "iteration": 17,
+        "min_ground_m": 0.0018000103511785952,
+        "min_self_m": 0,
+        "max_locked_pose_error": 3.2734329139145004e-05,
+        "max_update": 0.00809997492267208
+      },
+      {
+        "iteration": 18,
+        "min_ground_m": 0.0018000234074127723,
+        "min_self_m": 0,
+        "max_locked_pose_error": 3.274679727649149e-05,
+        "max_update": 0.004184355124704425
+      },
+      {
+        "iteration": 19,
+        "min_ground_m": 0.0018000362078091263,
+        "min_self_m": 0,
+        "max_locked_pose_error": 3.3109119795526896e-05,
+        "max_update": 0.007350175162845783
+      },
+      {
+        "iteration": 20,
+        "min_ground_m": 0.0018000333015668795,
+        "min_self_m": 0,
+        "max_locked_pose_error": 3.316510337206423e-05,
+        "max_update": 0.0035026571988749644
+      },
+      {
+        "iteration": 21,
+        "min_ground_m": 0.001800002207413891,
+        "min_self_m": 0,
+        "max_locked_pose_error": 3.289832287203114e-05,
+        "max_update": 0.003895409167756476
+      },
+      {
+        "iteration": 22,
+        "min_ground_m": 0.0018000033383688456,
+        "min_self_m": 0,
+        "max_locked_pose_error": 3.3070893248718055e-05,
+        "max_update": 0.0057302861891392574
+      },
+      {
+        "iteration": 23,
+        "min_ground_m": 0.0018000014054904466,
+        "min_self_m": 0,
+        "max_locked_pose_error": 3.296045509563905e-05,
+        "max_update": 0.0034820831336169217
+      },
+      {
+        "iteration": 24,
+        "min_ground_m": 0.0018000046270635244,
+        "min_self_m": 0,
+        "max_locked_pose_error": 3.3457024330176154e-05,
+        "max_update": 0.002293602662182437
+      },
+      {
+        "iteration": 25,
+        "min_ground_m": 0.0018000271254269883,
+        "min_self_m": 0,
+        "max_locked_pose_error": 3.3107112743794023e-05,
+        "max_update": 0.0031222917320376225
+      },
+      {
+        "iteration": 26,
+        "min_ground_m": 0.001800001401271391,
+        "min_self_m": 0,
+        "max_locked_pose_error": 3.272846794572379e-05,
+        "max_update": 0.004226584673756625
+      },
+      {
+        "iteration": 27,
+        "min_ground_m": 0.001800069097543923,
+        "min_self_m": 0,
+        "max_locked_pose_error": 3.299265123466453e-05,
+        "max_update": 0.004002206534433662
+      },
+      {
+        "iteration": 28,
+        "min_ground_m": 0.0018000081244248277,
+        "min_self_m": 0,
+        "max_locked_pose_error": 3.385133905868616e-05,
+        "max_update": 0.0027358924914015793
+      },
+      {
+        "iteration": 29,
+        "min_ground_m": 0.0018000012149100618,
+        "min_self_m": 0,
+        "max_locked_pose_error": 3.3083708599163404e-05,
+        "max_update": 0.003623273604454461
+      },
+      {
+        "iteration": 30,
+        "min_ground_m": 0.0018000051967919416,
+        "min_self_m": 0,
+        "max_locked_pose_error": 3.308797292805923e-05,
+        "max_update": 0.003450638699247263
+      },
+      {
+        "iteration": 31,
+        "min_ground_m": 0.0018000122399334977,
+        "min_self_m": 0,
+        "max_locked_pose_error": 3.314398392146612e-05,
+        "max_update": 0.003179520417720077
+      },
+      {
+        "iteration": 32,
+        "min_ground_m": 0.0018000327753247046,
+        "min_self_m": 0,
+        "max_locked_pose_error": 3.276417541372027e-05,
+        "max_update": 0.0022332043657737888
+      },
+      {
+        "iteration": 33,
+        "min_ground_m": 0.0018000088863942875,
+        "min_self_m": 0,
+        "max_locked_pose_error": 3.331475536147801e-05,
+        "max_update": 0.0027942037060447802
+      },
+      {
+        "iteration": 34,
+        "min_ground_m": 0.0018000381847802826,
+        "min_self_m": 0,
+        "max_locked_pose_error": 3.3099156878826616e-05,
+        "max_update": 0.003864130795150418
+      },
+      {
+        "iteration": 35,
+        "min_ground_m": 0.0018000024783282097,
+        "min_self_m": 0,
+        "max_locked_pose_error": 3.273981697339107e-05,
+        "max_update": 0.0029585865727228197
+      },
+      {
+        "iteration": 36,
+        "min_ground_m": 0.0018000023782617407,
+        "min_self_m": 0,
+        "max_locked_pose_error": 3.3077236115284275e-05,
+        "max_update": 0.0025992720703964522
+      },
+      {
+        "iteration": 37,
+        "min_ground_m": 0.0018000054691374489,
+        "min_self_m": 0,
+        "max_locked_pose_error": 3.3217348680965175e-05,
+        "max_update": 0.004247630788767392
+      },
+      {
+        "iteration": 38,
+        "min_ground_m": 0.0018000362329758284,
+        "min_self_m": 0,
+        "max_locked_pose_error": 3.27516469657238e-05,
+        "max_update": 0.004177295901122487
+      },
+      {
+        "iteration": 39,
+        "min_ground_m": 0.001800087251986428,
+        "min_self_m": 0,
+        "max_locked_pose_error": 3.369640487592274e-05,
+        "max_update": 0.004176031043744602
+      },
+      {
+        "iteration": 40,
+        "min_ground_m": 0.001800005341312809,
+        "min_self_m": 0,
+        "max_locked_pose_error": 3.316299640867977e-05,
+        "max_update": 0.0031597610433162027
+      },
+      {
+        "iteration": 41,
+        "min_ground_m": 0.001800034128188831,
+        "min_self_m": 0,
+        "max_locked_pose_error": 3.301009885603405e-05,
+        "max_update": 0.004622120707752713
+      },
+      {
+        "iteration": 42,
+        "min_ground_m": 0.0018000772052243806,
+        "min_self_m": 0,
+        "max_locked_pose_error": 3.354483973445356e-05,
+        "max_update": 0.005090318397327258
+      },
+      {
+        "iteration": 43,
+        "min_ground_m": 0.0018000055411765735,
+        "min_self_m": 0,
+        "max_locked_pose_error": 3.347689421462632e-05,
+        "max_update": 0.006382579469596691
+      },
+      {
+        "iteration": 44,
+        "min_ground_m": 0.0018000054818682098,
+        "min_self_m": 0,
+        "max_locked_pose_error": 3.426372732353719e-05,
+        "max_update": 0.002546096862409407
+      }
+    ],
+    "validation": "Native kinematic geometry only; no dynamics validation; original references/manifests untouched."
+  },
+  "dataset_repair": {
+    "pipeline_revision": 3,
+    "source": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/data/motions/prone_getup/x2_getup_139_16_umr_v1_50hz.npz",
+    "source_sha256": "68ff79292a46f036b901fedc326df867d1329fdfa4bd7a9aa3e26de188edabf5",
+    "recipe": {
+      "steps": [
+        [
+          "arms",
+          [
+            0,
+            0.65
+          ],
+          0.07
+        ],
+        [
+          "arms",
+          [
+            3.85,
+            4.8
+          ],
+          0.07
+        ],
+        [
+          "arms",
+          [
+            5.7,
+            6.7
+          ],
+          0.07
+        ]
+      ],
+      "starts": [
+        5.8,
+        5.7
+      ],
+      "transition": 0.4
+    },
+    "additional_first_motion_refinements": []
+  }
+}
