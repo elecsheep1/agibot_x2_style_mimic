@@ -331,7 +331,7 @@ def standing_quality(
     near_standing = smoothstep(near_standing)
     # ----------------------------- 直立门控 -----------------------------
     upright_gate = (
-        (torch.minimum(root_up, torso_up) - 0.50) / 0.44
+        (torch.minimum(root_up, torso_up) - 0.50) / (math.cos(math.radians(10.0)) - 0.50)
     ).clamp(0.0, 1.0)
     # ---------------------------- 速度稳定性指标 ----------------------------
     stability_quality = torch.exp(

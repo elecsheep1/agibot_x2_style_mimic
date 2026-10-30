@@ -64,6 +64,14 @@ class AMPWindowAudit:
         reference = torch.cat([s.unfold(0, self.alg.amp_num_steps, 1).permute(0, 2, 1)
                                for s in self.alg.amp_reference.amp_states]).to(device)
         d = self.alg.amp_discriminator
+        # Self-contained offline analysis, using exactly the captured checkpoint statistics.
+        data["reference_windows"] = reference.cpu()
+        data["state_mean"] = d.state_mean.cpu()
+        data["state_std"] = d.state_std.cpu()
+        data["joint_names"] = list(self.alg.amp_cfg["joint_names"])
+        from x2_style_mimic.tasks.manager_based.x2_style_mimic.mdp.amp import AMP_KEY_BODY_NAMES
+        data["body_names"] = list(AMP_KEY_BODY_NAMES)
+        data["step_dt"] = self.env.step_dt
         ref = d.normalize(reference)
         ref_norm = ref.square().sum(-1)
         nearest, distances = [], []

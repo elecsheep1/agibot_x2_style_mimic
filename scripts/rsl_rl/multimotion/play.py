@@ -71,6 +71,8 @@ parser.add_argument("--eval-episodes-per-env", type=int, default=4,
                     help="Count the first K complete episodes per environment; 0 runs until interrupted.")
 parser.add_argument("--diagnostic-interval", type=float, default=10.0)
 parser.add_argument("--diagnostic-report", type=str, default=None)
+parser.add_argument("--amp-window-report", type=str, default=None,
+                    help="Capture AMP windows and reference-normalized feature errors with the checkpoint discriminator.")
 parser.add_argument("--policy-only", action="store_true",
                     help="Load policy/critic without the AMP discriminator; for inference across reference/config changes.")
 parser.add_argument("--motion-manifest", type=str, default=None,
@@ -81,6 +83,9 @@ add_launcher_args(parser)
 args_cli, remaining_args = setup_preset_cli(parser)
 if args_cli.eval_episodes_per_env < 0 or args_cli.diagnostic_interval <= 0:
     parser.error("Episode quota must be nonnegative and diagnostic interval positive")
+
+if args_cli.amp_window_report and args_cli.policy_only:
+    parser.error("AMP analysis requires the checkpoint discriminator; omit --policy-only")
 
 if args_cli.video:
     args_cli.enable_cameras = True
@@ -242,6 +247,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
         # reset environment
         obs = env.get_observations()
+        amp_audit = None
+        if args_cli.amp_window_report:
+            from amp_window_audit import AMPWindowAudit
+            amp_audit = AMPWindowAudit(env.unwrapped, runner.alg, args_cli.amp_window_report,
+                                       resume_path, args_cli.eval_episodes_per_env)
         timestep = 0
         # simulate environment
         try:
@@ -250,9 +260,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 # run everything in inference mode
                 with torch.inference_mode():
                     # agent stepping
+                    if amp_audit is not None:
+                        amp_audit.begin(obs)
                     actions = policy(obs)
                     # env stepping
                     obs, _, dones, extras = env.step(actions)
+                    if amp_audit is not None:
+                        amp_audit.advance(dones, extras)
                     diagnostics.update(dones, extras)
                     # reset recurrent states for episodes that have terminated
                     if version.parse(installed_version) >= version.parse("4.0.0"):
@@ -277,7 +291,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         finally:
             if diagnostics.reported_steps != diagnostics.steps:
                 diagnostics.report()
-            env.close()
+            try:
+                if amp_audit is not None:
+                    amp_audit.close()
+            finally:
+                env.close()
 
 
 if __name__ == "__main__":

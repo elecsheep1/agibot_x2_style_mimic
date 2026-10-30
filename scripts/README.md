@@ -87,3 +87,7 @@ python scripts/rsl_rl/multimotion/play_transition.py --checkpoint /absolute/path
 `rsl_rl/multimotion/play.py` 会自动输出七项站稳条件的全回合达标率、高度超过成功阈值时的达标率，以及连续稳定计时中断涉及的条件。统计仅包含已完成且在验收配额内的回合，JSON 中保留逐回合、逐动作和总体结果及实际阈值。一次中断可以涉及多项条件，不能把各原因次数相加当作中断总数；回合结束本身不计为中断。采集只在回放进程内挂接终止判定阶段，不改训练共用判定文件。
 
 回放的骨盆时序同时记录 `standing_raw`、`root_up1_raw` 和 `root_up1_gain_raw`：复用当前站立奖励函数，只把 root_up 输入置为 1，其余输入保持实际值。末段表给出最后 5 秒均值及按 standing 权重和控制步长缩放的增益；这是奖励公式对照，不代表实际回正后的动力学结果。
+
+## AMP 特征误差分析
+
+`checks/analyze_amp_feature_errors.py` 对回放采集的完整 AMP233 窗口做分阶段、分块、分关节和分刚体误差分析，以及检查点 D 的特征替换敏感性。采集使用 `rsl_rl/multimotion/play.py --amp-window-report <windows.pt>`，不能同时启用 `--policy-only`。详见 [6900 基线分析](../docs/amp_feature_analysis_6900_20261030.md)。
