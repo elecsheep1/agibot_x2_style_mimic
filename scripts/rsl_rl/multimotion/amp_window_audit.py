@@ -3,12 +3,14 @@ import json
 from pathlib import Path
 import torch
 from x2_style_mimic.algorithms.amp.history import AMPHistory
+from x2_style_mimic.tasks.manager_based.x2_style_mimic.mdp.amp import (
+    AMP_STATE_DIM,
+    AMP_FEATURE_VERSION,
+    AMP_FEATURE_BLOCKS,
+    AMP_KEY_BODY_NAMES,
+)
 
-BLOCKS = {"root_height": (0, 1), "root_gravity": (1, 4),
-          "root_linear": (4, 7), "root_angular_scaled": (7, 10),
-          "joint_position": (10, 39), "joint_velocity_scaled": (39, 68),
-          "body_position": (68, 101), "body_rotation6d": (101, 167),
-          "body_linear": (167, 200), "body_angular_scaled": (200, 233)}
+BLOCKS = AMP_FEATURE_BLOCKS
 
 class AMPWindowAudit:
     def __init__(self, env, algorithm, output, checkpoint, quota):
@@ -16,7 +18,7 @@ class AMPWindowAudit:
         self.output = Path(output).resolve()
         self.checkpoint = str(Path(checkpoint).resolve())
         self.quota = quota
-        self.history = AMPHistory(env.num_envs, 233, algorithm.amp_num_steps, env.device)
+        self.history = AMPHistory(env.num_envs, AMP_STATE_DIM, algorithm.amp_num_steps, env.device)
         self.episodes = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
         self.times = torch.zeros(env.num_envs, device=env.device)
         self.rows = []
@@ -57,7 +59,9 @@ class AMPWindowAudit:
         data["standing"] = standing
         data["style_reward"] = (1 - .25 * (data["score"] - 1).square()).clamp(0, 1)
         data["checkpoint"] = self.checkpoint
-        data["feature_version"] = "x2_amp_relative_body_v1_233_window_v1"
+        data["feature_version"] = AMP_FEATURE_VERSION + "_window_v1"
+        data["state_dim"] = AMP_STATE_DIM
+        data["feature_blocks"] = dict(AMP_FEATURE_BLOCKS)
         self.output.parent.mkdir(parents=True, exist_ok=True)
         torch.save(data, self.output)
         device = self.alg.device
@@ -69,7 +73,6 @@ class AMPWindowAudit:
         data["state_mean"] = d.state_mean.cpu()
         data["state_std"] = d.state_std.cpu()
         data["joint_names"] = list(self.alg.amp_cfg["joint_names"])
-        from x2_style_mimic.tasks.manager_based.x2_style_mimic.mdp.amp import AMP_KEY_BODY_NAMES
         data["body_names"] = list(AMP_KEY_BODY_NAMES)
         data["step_dt"] = self.env.step_dt
         ref = d.normalize(reference)

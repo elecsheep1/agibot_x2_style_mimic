@@ -3,23 +3,47 @@ import json
 import numpy as np
 import torch
 
+# AMP_KEY_BODY_NAMES = (
+#     "torso_link",
+#     "left_shoulder_yaw_link",
+#     "right_shoulder_yaw_link",
+#     "left_wrist_roll_link",
+#     "right_wrist_roll_link",
+#     "left_hip_yaw_link",
+#     "right_hip_yaw_link",
+#     "left_knee_link",
+#     "right_knee_link",
+#     "left_ankle_roll_link",
+#     "right_ankle_roll_link",
+# )
+
+# # 根状态 10 + 关节状态 58 + 11 个刚体 × 15。
+# AMP_STATE_DIM = 68 + 15 * len(AMP_KEY_BODY_NAMES)
+# AMP_FEATURE_VERSION = "x2_amp_relative_body_v1_233"
+
 AMP_KEY_BODY_NAMES = (
-    "torso_link",
-    "left_shoulder_yaw_link",
-    "right_shoulder_yaw_link",
     "left_wrist_roll_link",
     "right_wrist_roll_link",
-    "left_hip_yaw_link",
-    "right_hip_yaw_link",
-    "left_knee_link",
-    "right_knee_link",
     "left_ankle_roll_link",
     "right_ankle_roll_link",
+    "left_shoulder_yaw_link",
+    "right_shoulder_yaw_link",
 )
 
-# 根状态 10 + 关节状态 58 + 11 个刚体 × 15。
-AMP_STATE_DIM = 68 + 15 * len(AMP_KEY_BODY_NAMES)
-AMP_FEATURE_VERSION = "x2_amp_relative_body_v1_233"
+# 根状态10 + 关节位置29 + 关节速度29 + 六个关键点位置18。
+AMP_STATE_DIM = 68 + 3 * len(AMP_KEY_BODY_NAMES)
+AMP_FEATURE_VERSION = "x2_amp_keypoint_position_v1_86"
+
+# 供诊断工具共用，区间为左闭右开。
+AMP_FEATURE_BLOCKS = {
+    "root_height": (0, 1),
+    "root_gravity": (1, 4),
+    "root_linear": (4, 7),
+    "root_angular_scaled": (7, 10),
+    "joint_position": (10, 39),
+    "joint_velocity_scaled": (39, 68),
+    "body_position": (68, AMP_STATE_DIM),
+}
 
 def normalize_quaternion(q):
     norm = q.norm(dim=-1, keepdim=True)
@@ -113,45 +137,87 @@ def relative_body_features(
         relative_angular,           # 关键刚体相对角速度
     )
 
+# def build_amp_state(
+#     root_pos_w,         # 根位置
+#     root_quat_xyzw,     # 根四元数
+#     root_lin_vel_w,     # 根线速度
+#     root_ang_vel_w,     # 根角速度
+#     joint_pos,          # 关节位置
+#     joint_vel,          # 关节速度
+#     key_pose_w,          # 关键刚体位置
+#     key_vel_w,          # 关键刚体速度
+#     ground_height=0.0,  # 地面高度基准
+# ):
+#     """参考数据和仿真观测共用的特征构造函数。"""
+#     root_q = normalize_quaternion(root_quat_xyzw)
+
+#     # 世界系中的单位重力方向
+#     gravity_w = torch.zeros_like(root_pos_w)
+#     gravity_w[:, 2] = -1.0
+
+#     position, rotation, linear, angular = relative_body_features(
+#         root_pos_w,
+#         root_q,
+#         root_lin_vel_w,
+#         root_ang_vel_w,
+#         key_pose_w,
+#         key_vel_w,
+#     )
+
+#     state = torch.cat(
+#         (
+#             root_pos_w[:, 2:3] - ground_height,  # 根高度
+#             inverse_rotate(root_q, gravity_w),  # 根坐标系中的重力方向
+#             inverse_rotate(root_q, root_lin_vel_w),  # 根坐标系中的线速度
+#             inverse_rotate(root_q, root_ang_vel_w) * 0.25,  # 根坐标系中的角速度，缩放
+#             joint_pos,  # 关节位置
+#             joint_vel * 0.05,  # 关节速度
+#             position.flatten(start_dim=1),  # 关键刚体相对位置
+#             rotation.flatten(start_dim=1),  # 关键刚体相对旋转
+#             linear.flatten(start_dim=1),  # 关键刚体相对线速度
+#             angular.flatten(start_dim=1) * 0.25,  # 关键刚体相对角速度
+#         ),
+#         dim=-1,
+#     )
+
+#     if state.shape[-1] != AMP_STATE_DIM:
+#         raise ValueError(f"AMP 状态应为 {AMP_STATE_DIM} 维，实际为 {state.shape}")
+
+#     return state
+
 def build_amp_state(
-    root_pos_w,         # 根位置
-    root_quat_xyzw,     # 根四元数
-    root_lin_vel_w,     # 根线速度
-    root_ang_vel_w,     # 根角速度
-    joint_pos,          # 关节位置
-    joint_vel,          # 关节速度
-    key_pose_w,          # 关键刚体位置
-    key_vel_w,          # 关键刚体速度
-    ground_height=0.0,  # 地面高度基准
+    root_pos_w,
+    root_quat_xyzw,
+    root_lin_vel_w,
+    root_ang_vel_w,
+    joint_pos,
+    joint_vel,
+    key_pose_w,
+    key_vel_w,
+    ground_height=0.0,
 ):
-    """参考数据和仿真观测共用的特征构造函数。"""
+    """AMP86：根状态、关节状态和六个关键点相对位置。"""
     root_q = normalize_quaternion(root_quat_xyzw)
 
-    # 世界系中的单位重力方向
     gravity_w = torch.zeros_like(root_pos_w)
     gravity_w[:, 2] = -1.0
 
-    position, rotation, linear, angular = relative_body_features(
-        root_pos_w,
-        root_q,
-        root_lin_vel_w,
-        root_ang_vel_w,
-        key_pose_w,
-        key_vel_w,
+    # 完整骨盆坐标系中的关键点相对位置，去掉旋转和速度特征。
+    relative_position = inverse_rotate(
+        root_q[:, None, :],
+        key_pose_w[..., :3] - root_pos_w[:, None, :],
     )
 
+    # 保留 key_vel_w 参数以兼容现有调用，但 AMP86 不使用它。
     state = torch.cat(
         (
-            root_pos_w[:, 2:3] - ground_height,  # 根高度
-            inverse_rotate(root_q, gravity_w),  # 根坐标系中的重力方向
-            inverse_rotate(root_q, root_lin_vel_w),  # 根坐标系中的线速度
-            inverse_rotate(root_q, root_ang_vel_w) * 0.25,  # 根坐标系中的角速度，缩放
-            joint_pos,  # 关节位置
-            joint_vel * 0.05,  # 关节速度
-            position.flatten(start_dim=1),  # 关键刚体相对位置
-            rotation.flatten(start_dim=1),  # 关键刚体相对旋转
-            linear.flatten(start_dim=1),  # 关键刚体相对线速度
-            angular.flatten(start_dim=1) * 0.25,  # 关键刚体相对角速度
+            root_pos_w[:, 2:3] - ground_height,
+            inverse_rotate(root_q, gravity_w),
+            inverse_rotate(root_q, root_lin_vel_w),
+            inverse_rotate(root_q, root_ang_vel_w) * 0.25,
+            joint_pos,
+            joint_vel * 0.05,
+            relative_position.flatten(start_dim=1),
         ),
         dim=-1,
     )

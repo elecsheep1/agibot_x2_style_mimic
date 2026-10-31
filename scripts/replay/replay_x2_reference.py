@@ -135,6 +135,7 @@ def main():
         from x2_style_mimic.tasks.manager_based.x2_style_mimic.mdp.amp import (
             AMP_KEY_BODY_NAMES,
             AMP_STATE_DIM,
+            AMP_FEATURE_BLOCKS,
             AMPReferenceMotion,
             amp_observation,
         )
@@ -159,24 +160,11 @@ def main():
         amp_env = SimpleNamespace(scene=scene)
 
         amp_feature_blocks = {
-            "height": slice(0, 1),
-            "gravity": slice(1, 4),
-            "linear_velocity": slice(4, 7),
-            "angular_velocity_scaled": slice(7, 10),
-            "joint_position": slice(10, 39),
-            "joint_velocity_scaled": slice(39, 68),
+            name: slice(lo, hi)
+            for name, (lo, hi) in AMP_FEATURE_BLOCKS.items()
         }
-        offset = 68
-        for name, width in (
-            ("body_relative_position", 3),
-            ("body_relative_rotation_6d", 6),
-            ("body_relative_linear_velocity", 3),
-            ("body_relative_angular_scaled", 3),
-        ):
-            end = offset + width * len(AMP_KEY_BODY_NAMES)
-            amp_feature_blocks[name] = slice(offset, end)
-            offset = end
-        if offset != AMP_STATE_DIM:
+        covered = [i for lo, hi in AMP_FEATURE_BLOCKS.values() for i in range(lo, hi)]
+        if sorted(covered) != list(range(AMP_STATE_DIM)):
             raise ValueError("AMP feature blocks do not cover the current feature layout")
 
 
