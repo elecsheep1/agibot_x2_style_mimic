@@ -28,15 +28,16 @@ def reset_discriminator(algorithm):
     if algorithm.amp_history is not None:
         algorithm.amp_history.clear()
     algorithm._amp_sample_history = None
-    print("[AMP reset] Network and Adam state reset; PPO and reference statistics preserved.", flush=True)
+    print("[AMP reset] Network and Adam state reset; PPO and saved AMP normalization statistics preserved.", flush=True)
 
 
 def warmup_discriminator(runner, iterations, log_path):
     """Collect stochastic frozen-policy rollouts and update only the discriminator.
 
     Uses real pre-reset terminal AMP states and the standard history implementation.
-    Does not call PPO act/process/update, update observation statistics, or advance
-    the PPO iteration counter. Warmup samples remain in the fresh replay pool.
+    Does not call PPO act/process/update, update actor/critic observation statistics, or advance
+    the PPO iteration counter. D updates also update joint AMP normalization statistics.
+    Warmup samples remain in the fresh replay pool.
     """
     if iterations == 0:
         return

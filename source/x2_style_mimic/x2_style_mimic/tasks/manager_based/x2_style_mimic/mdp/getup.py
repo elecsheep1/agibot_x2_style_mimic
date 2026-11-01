@@ -398,7 +398,7 @@ def standing_quality_reward(
 
     root_velocity = robot.data.root_link_vel_w.torch
 
-    return standing_quality(
+    standing_reward = standing_quality(
         height=height,
         root_up=root_up,
         torso_up=torso_up,
@@ -406,6 +406,40 @@ def standing_quality_reward(
         angular_velocity=root_velocity[:, 3:6],
         feet_support=feet_support,
         wrist_load=wrist_load,
+    )
+
+    # ---------------------------- 站立姿态调优 ----------------------------
+        # 接近默认关节姿态：
+    # 允许约 4.6° 的自由调整，超过后再平滑降低姿态得分。
+    joint_error = (
+        robot.data.joint_pos.torch
+        - robot.data.default_joint_pos.torch
+    ).abs()
+
+    joint_error = (joint_error - 0.08).clamp_min(0.0)
+
+    default_pose_quality = torch.exp(
+        -(joint_error / 0.30).square().mean(dim=-1)
+    )
+
+    # 高度和身体朝向都接近站立后，才逐渐启用。
+    # 不用连续稳定计时，避免小幅晃动后姿态要求突然消失。
+    height_gate = smoothstep(
+        ((height - 0.50) / (0.60 - 0.50)).clamp(0.0, 1.0)
+    )
+
+    up_gate = smoothstep(
+        (
+            (torch.minimum(root_up, torso_up) - 0.85)
+            / (0.97 - 0.85)
+        ).clamp(0.0, 1.0)
+    )
+
+    pose_gate = height_gate * up_gate
+
+    # 第一轮采用较弱的姿态要求，最大降低现有站立奖励的 15%。
+    return standing_reward * (
+        1.0 - 0.15 * pose_gate * (1.0 - default_pose_quality)
     )
 
 # 终止与成功条件

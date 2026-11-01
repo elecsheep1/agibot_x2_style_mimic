@@ -75,6 +75,8 @@ parser.add_argument("--amp-window-report", type=str, default=None,
                     help="Capture AMP windows and reference-normalized feature errors with the checkpoint discriminator.")
 parser.add_argument("--policy-only", action="store_true",
                     help="Load policy/critic without the AMP discriminator; for inference across reference/config changes.")
+parser.add_argument("--amp-gradient-report", type=str, default=None,
+                    help="Read-only stochastic PPO/AMP gradient audit; writes JSON, never updates weights.")
 parser.add_argument("--motion-manifest", type=str, default=None,
                     help="Reference manifest for evaluation births (also used to initialize AMP reference data).")
 parser.add_argument("--external_callback", default=None, help="Fully qualified path to an externally defined callback.")
@@ -84,7 +86,7 @@ args_cli, remaining_args = setup_preset_cli(parser)
 if args_cli.eval_episodes_per_env < 0 or args_cli.diagnostic_interval <= 0:
     parser.error("Episode quota must be nonnegative and diagnostic interval positive")
 
-if args_cli.amp_window_report and args_cli.policy_only:
+if (args_cli.amp_window_report or args_cli.amp_gradient_report) and args_cli.policy_only:
     parser.error("AMP analysis requires the checkpoint discriminator; omit --policy-only")
 
 if args_cli.video:
@@ -204,6 +206,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             "iteration": False, "rnd": False, "amp": not args_cli.policy_only,
             "assist_curriculum": False,
         })
+
+        if args_cli.amp_gradient_report:
+            from amp_gradient_audit import run_audit
+            try:
+                run_audit(env, runner, args_cli.amp_gradient_report, resume_path)
+            finally:
+                env.close()
+            return
 
         # obtain the trained policy for inference
         policy = runner.get_inference_policy(device=env.unwrapped.device)

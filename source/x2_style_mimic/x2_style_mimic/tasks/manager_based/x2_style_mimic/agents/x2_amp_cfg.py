@@ -35,7 +35,9 @@ class MultiMotionAMPAlgorithmCfg(RslRlPpoAlgorithmCfg):
 
         "learning_rate": 5e-5,
         "gradient_penalty": 10.0,
-        "weight_decay": 0.0001,
+        "trunk_weight_decay": 1.0e-3,
+        "head_weight_decay": 1.0e-1,
+        "normalization_clip": 10.0,
 
         "buffer_capacity": 100_000,
         "updates_per_iteration": 4,

@@ -72,12 +72,18 @@ class AMPWindowAudit:
         from x2_style_mimic.tasks.manager_based.x2_style_mimic.mdp.amp import AMP_KEY_BODY_NAMES
         data["body_names"] = list(AMP_KEY_BODY_NAMES)
         data["step_dt"] = self.env.step_dt
-        ref = d.normalize(reference)
+        data["normalization"] = {
+            "mode": "joint_running" if hasattr(d, "state_count") else "fixed_reference",
+            "clip": getattr(d, "normalization_clip", None),
+        }
+        data["distance_metric"] = "unclipped_checkpoint_std"
+        # Keep descriptive matching and block errors in the same unclipped metric.
+        ref = (reference / d.state_std).flatten(1)
         ref_norm = ref.square().sum(-1)
         nearest, distances = [], []
         # Match entire windows to the closest window anywhere in the reference library.
         for chunk in data["windows"].split(128):
-            z = d.normalize(chunk.to(device))
+            z = (chunk.to(device) / d.state_std).flatten(1)
             dist = (z.square().sum(-1, keepdim=True) + ref_norm[None] - 2*z@ref.T).clamp_min(0)
             value, index = dist.min(-1)
             nearest.append(index.cpu()); distances.append((value / z.shape[-1]).sqrt().cpu())
@@ -101,7 +107,8 @@ class AMPWindowAudit:
                 "block_normalized_rms": {k: float(v[mask].mean()) for k,v in errors.items()}}
         report = {"checkpoint": self.checkpoint, "capture": str(self.output),
             "phase_definition": "standing: current uninterrupted success-predicate hold exceeds full window span; other windows: getup_or_transition (including boundary/recovery)",
-            "comparison": "Nearest full five-state reference window, all clips/all phases; normalized with checkpoint reference std (floor 0.05). Descriptive mismatch, not causal attribution.",
+            "normalization": data["normalization"],
+            "comparison": "Nearest full five-state reference window, all clips/all phases; matching and block errors use unclipped checkpoint-standardized differences (std floor 0.05). D scores separately use checkpoint input clipping. Descriptive mismatch, not causal attribution.",
             "all": stats(torch.ones_like(standing)), "standing": stats(standing), "getup_or_transition": stats(~standing),
             "by_motion": {str(int(i)): {"standing": stats(standing & (data["motion_id"]==i)),
                 "getup_or_transition": stats(~standing & (data["motion_id"]==i))} for i in data["motion_id"].unique()}}

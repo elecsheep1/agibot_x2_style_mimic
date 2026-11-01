@@ -178,10 +178,8 @@ class GetUpEventsCfg:
             "height_offset": 0.01,
             "initial_frame_probability": 0.5,
             "transition_frame_ranges": (
-                (170, 225),  # x2_getup_v0
                 (285, 350),  # 139_16
                 (375, 500),  # 139_17
-                (195, 275),  # 140_02
             ),
         },
     )
@@ -190,7 +188,7 @@ class GetUpEventsCfg:
 class GetUpRewardsCfg:
     standing = RewTerm(
         func=getup_mdp.standing_quality_reward,
-        weight=20.0,
+        weight=00.0,
         params={
             "torso_cfg": SceneEntityCfg(
                 "robot",
@@ -312,12 +310,12 @@ class X2MultiMotionGetUpEnvCfg(X2StyleMimicEnvCfg):
     actions: GetUpActionsCfg = GetUpActionsCfg()
 
     # 保留现有环境所需字段，默认使用零辅助力。
-    assist_force_levels: tuple = (0.0,)
+    assist_force_levels: tuple = (200.0, 150.0, 100.0, 50.0, 0.0)
     assist_initial_stage: int = 0
-    assist_zero_probability: float = 1.0
+    assist_zero_probability: float = 0.10
     assist_full_until_s: float = 2.0
     assist_zero_after_s: float = 5.0
-    assist_curriculum_enabled: bool = False
+    assist_curriculum_enabled: bool = True
     assist_curriculum_window: int = 64
     assist_curriculum_threshold: float = 0.80
 

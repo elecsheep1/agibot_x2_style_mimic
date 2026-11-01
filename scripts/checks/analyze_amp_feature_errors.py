@@ -85,12 +85,35 @@ def score_stats(scores, mask):
                 reward_mean=float(r.mean()),zero_reward_fraction=float((r==0).float().mean()))
 
 
+
+def checkpoint_normalization(checkpoint):
+    """Old checkpoints used fixed statistics without clipping."""
+    state = checkpoint['discriminator']
+    running = 'state_count' in state or 'state_var' in state
+    clip = checkpoint['settings'].get('normalization_clip')
+    if running and clip is None:
+        raise ValueError('Running-normalization checkpoint is missing normalization_clip')
+    if clip is not None and (not torch.isfinite(torch.tensor(float(clip))) or float(clip) <= 0):
+        raise ValueError('normalization_clip must be finite and positive')
+    return dict(mode='joint_running' if running else 'fixed_reference',
+                clip=None if clip is None else float(clip))
+
+
+def discriminator_input(windows, mean, std, normalization):
+    normalized = (windows - mean) / std
+    clip = normalization['clip']
+    if clip is not None:
+        normalized = normalized.clamp(-clip, clip)
+    return normalized.flatten(1)
+
+
 def sensitivity(data, refs, matches, group_sets, mask, device, max_samples=1024):
     ids=mask.nonzero().flatten()
     if len(ids)>max_samples:ids=ids[torch.linspace(0,len(ids)-1,max_samples).long()]
     if not len(ids):return dict(count=0)
     ckpt=torch.load(data['checkpoint'],map_location='cpu',weights_only=False)['amp_window']
     state=ckpt['discriminator']
+    normalization=checkpoint_normalization(ckpt)
     if not torch.equal(data['state_std'],state['state_std']) or not torch.equal(data['state_mean'],state['state_mean']):
         raise ValueError('Capture normalization differs from checkpoint')
     net=nn.Sequential(nn.Linear(5*233,256),nn.ELU(),nn.Linear(256,128),nn.ELU(),nn.Linear(128,1)).to(device)
@@ -98,7 +121,7 @@ def sensitivity(data, refs, matches, group_sets, mask, device, max_samples=1024)
     net.eval()
     mean=data['state_mean'].to(device);std=data['state_std'].to(device)
     w=data['windows'][ids].to(device);r=refs[matches[ids]].to(device)
-    def score(x):return net(((x-mean)/std).flatten(1)).squeeze(-1)
+    def score(x):return net(discriminator_input(x,mean,std,normalization)).squeeze(-1)
     with torch.no_grad():
         base=score(w)
         if not torch.allclose(base.cpu(),data['score'][ids],atol=1e-4,rtol=1e-4):
@@ -122,8 +145,11 @@ def analyze(path, output, device='cpu'):
     if w.ndim!=3 or w.shape[1:]!=(5,233) or len(d['joint_names'])!=29 or len(d['body_names'])!=11:
         raise ValueError('Expected five-state AMP233 windows with named joints/bodies')
     gs=groups(d['joint_names'],d['body_names'])
-    match=d.get('nearest_reference_window_index')
-    if match is None:match=nearest_match(w,refs,std,device)
+    checkpoint=torch.load(d['checkpoint'],map_location='cpu',weights_only=False)['amp_window']
+    normalization=checkpoint_normalization(checkpoint)
+    # Descriptive distances stay unclipped, even when D inputs are clipped.
+    # Recompute so older captures with clipped nearest-neighbor matching are safe.
+    match=nearest_match(w,refs,std,device)
     phases={'all':torch.ones(len(w),dtype=torch.bool),
             'pre_fade_hold_le_010':d['hold_s']<=.10,
             'fade_hold_010_to_050':(d['hold_s']>.10)&(d['hold_s']<.50),
@@ -131,7 +157,8 @@ def analyze(path, output, device='cpu'):
     report=dict(checkpoint=d['checkpoint'],capture=str(Path(path).resolve()),
         definitions=dict(phase='Window endpoint hold_seconds; pre-fade includes failures, prone stillness and recovery. Complete valid windows only.',
                          matching='Nearest whole 5-state window across all clips/phases. Same-birth-motion matching also reported.',
-                         normalization='Checkpoint reference std, floor 0.05; scaled feature units are preserved.',
+                         normalization=normalization,
+                         distance='Unclipped differences divided by checkpoint std (floor 0.05), for both matching and error blocks; scaled feature units are preserved. D scoring separately applies checkpoint clipping.',
                          errors='Aggregate normalized RMS and squared-error share, not discriminator importance.',
                          sensitivity='Replace selected features across all five states with nearest-reference values. Hybrid inputs can be physically inconsistent/out of distribution; descriptive sensitivity, not causal proof or a reduced-feature retraining result.'),
         dimensions=233,reference_files=d['reference_files'],reference_window_counts=d['reference_window_counts'],
@@ -155,7 +182,8 @@ def analyze(path, output, device='cpu'):
     output=Path(output);output.mkdir(parents=True,exist_ok=True)
     (output/'feature_errors.json').write_text(json.dumps(report,ensure_ascii=False,indent=2))
     lines=['# AMP233 特征误差分析','',f"检查点：`{d['checkpoint']}`",'',
-           '仅描述当前策略与参考的差异；高误差不等于特征不重要。混合替换输入可能不满足物理一致性。','',
+           '仅描述当前策略与参考的差异；高误差不等于特征不重要。混合替换输入可能不满足物理一致性。',
+           f"标准化：{normalization['mode']}；D 输入裁剪：{normalization['clip']}。匹配和误差统计均使用未裁剪距离。",'',
            '|阶段|窗口数|P10 / P50 / P90|原始风格奖励|零奖励比例|归一化 RMS|',
            '|---|---:|---|---:|---:|---:|']
     for name,item in report['phases'].items():

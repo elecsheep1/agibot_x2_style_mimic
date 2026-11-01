@@ -260,7 +260,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 "warmup_iterations": args_cli.discriminator_warmup_iterations,
                 "ppo_optimizer_preserved_except_std": True,
                 "exploration_reset": exploration_reset,
-                "reference_normalization_preserved": True,
+                "amp_normalization_preserved_at_reset": True,
+                "amp_normalization_updates_during_warmup": True,
             }
             dump_yaml(os.path.join(log_dir, "params", "discriminator_reset.yaml"), reset_info)
             warmup_discriminator(

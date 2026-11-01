@@ -54,7 +54,7 @@ def pelvis_pose(env, params):
 def standing_reward_comparison(env, params):
     """Evaluate the existing reward twice, changing only its root_up input."""
     from x2_style_mimic.tasks.manager_based.x2_style_mimic.mdp.getup import (
-        ground_contact_force, standing_quality, standing_quality_reward,
+        ground_contact_force, standing_quality, standing_quality_reward, smoothstep,
     )
     robot = env.scene["robot"]
     q = robot.data.body_link_pose_w.torch[:, params["torso_cfg"].body_ids, 3:7]
@@ -72,13 +72,29 @@ def standing_reward_comparison(env, params):
             ground_contact_force(env, cfg) for cfg in params["wrist_sensor_cfgs"]
         ], dim=-1).sum(dim=-1),
     )
-    actual = standing_quality(**inputs)
+    # Mirror the production default-pose multiplier, including its root_up gate.
+    joint_error = (robot.data.joint_pos.torch - robot.data.default_joint_pos.torch).abs()
+    default_pose_quality = torch.exp(
+        -((joint_error - 0.08).clamp_min(0.0) / 0.30).square().mean(dim=-1)
+    )
+
+    def complete_reward(values):
+        height_gate = smoothstep(((values["height"] - 0.50) / 0.10).clamp(0.0, 1.0))
+        up_gate = smoothstep(
+            ((torch.minimum(values["root_up"], values["torso_up"]) - 0.85)
+             / (0.97 - 0.85)).clamp(0.0, 1.0)
+        )
+        return standing_quality(**values) * (
+            1.0 - 0.15 * height_gate * up_gate * (1.0 - default_pose_quality)
+        )
+
+    actual = complete_reward(inputs)
     # Verify the replay-side input extraction against the production reward.
     expected = standing_quality_reward(env, **params)
     if not torch.allclose(actual, expected, atol=1e-6, rtol=1e-5):
         raise RuntimeError("Replay reward extraction disagrees with standing_quality_reward")
     inputs["root_up"] = torch.ones_like(inputs["root_up"])
-    corrected = standing_quality(**inputs)
+    corrected = complete_reward(inputs)
     return torch.stack((actual, corrected, corrected - actual), dim=-1)
 
 

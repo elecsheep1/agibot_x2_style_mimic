@@ -14,10 +14,12 @@ class AMPDiscriminator(nn.Module):
 
     def __init__(
         self,
-        reference_states,       # 整段参考动作提取出来的 AMP 状态
-        learning_rate=1e-4,     # 判别器的学习率，默认 0.0001
-        gradient_penalty=10.0,  # 梯度惩罚的强度，默认 10
-        weight_decay=0.0,       # 权重衰减，默认 0
+        reference_states,               # 整段参考动作提取出来的 AMP 状态
+        learning_rate=1e-4,             # 判别器的学习率，默认 0.0001
+        gradient_penalty=10.0,          # 梯度惩罚的强度，默认 10
+        trunk_weight_decay=1.0e-3,      # 主干网络权重衰减，默认 0.001
+        head_weight_decay=1.0e-1,       # 输出网络权重衰减，默认 0.1
+        normalization_clip=10.0,        # 归一化统计量裁剪，避免数值过大，默认 10
     ):
         super().__init__()
 
@@ -29,18 +31,27 @@ class AMPDiscriminator(nn.Module):
 
         states = reference_states.detach().float()
 
-        # v0 使用固定的参考统计量。
-        # 参考样本和策略样本共用相同的均值、标准差。
+        self.normalization_clip = float(normalization_clip)
+
         self.register_buffer(
             "state_mean",
             states.mean(dim=0).clone(),
         )
         self.register_buffer(
+            "state_var",
+            states.var(dim=0,unbiased=False,).clone(),
+        )
+        self.register_buffer(
+            "state_count",
+            torch.tensor(
+                float(states.shape[0]),
+                dtype=torch.float64,
+                device=states.device,
+            )
+        )
+        self.register_buffer(
             "state_std",
-            states.std(
-                dim=0,
-                unbiased=False,
-            ).clamp_min(0.05).clone(),
+            self.state_var.sqrt().clamp_min(0.05).clone(),
         )
 
         # 相邻两帧输入
@@ -55,11 +66,76 @@ class AMPDiscriminator(nn.Module):
         self.gradient_penalty = gradient_penalty
 
         # 创建优化器，优化器负责根据梯度修改网络参数。
-        self.optimizer = torch.optim.Adam(
-            self.network.parameters(),
-            lr=learning_rate,
-            weight_decay=weight_decay,
+        self.configure_optimizer(
+            learning_rate,
+            trunk_weight_decay,
+            head_weight_decay,
         )
+
+    def configure_optimizer(
+        self,
+        learning_rate,
+        trunk_weight_decay,
+        head_weight_decay,
+    ):
+        """重新创建优化器，支持不同的学习率和权重衰减。"""
+        self.optimizer = torch.optim.Adam(
+            [
+                {
+                    "name": "amp_trunk",
+                    "params": list(self.network[:-1].parameters()),
+                    "weight_decay": float(trunk_weight_decay),
+                },
+                {
+                    "name": "amp_head",
+                    "params": list(self.network[-1].parameters()),
+                    "weight_decay": float(head_weight_decay),
+                },
+            ],
+            lr=float(learning_rate),
+        )
+
+    @torch.no_grad()
+    def update_normalization(self, reference, policy):
+        """参考和策略共同更新同一个统计器；支持窗口或帧对。"""
+        state_dim = self.state_mean.numel()
+        samples = torch.cat(
+            [
+                reference.detach().reshape(-1, state_dim),
+                policy.detach().reshape(-1, state_dim),
+            ],
+            dim=0,
+        ).to(device=self.state_mean.device, dtype=self.state_mean.dtype)
+
+        if samples.shape[0] == 0:
+            return
+        if not torch.isfinite(samples).all():
+            raise ValueError("AMP 标准化样本包含 NaN/Inf")
+        batch_mean = samples.mean(dim=0)
+        batch_var = samples.var(dim=0, unbiased=False)
+        batch_count = samples.shape[0]
+
+        total_count = self.state_count + batch_count    # 累计样本数量
+        delta = batch_mean - self.state_mean
+        new_mean = self.state_mean + delta * (batch_count / total_count).to(self.state_mean.dtype)
+        new_var = (
+            self.state_var * self.state_count.to(self.state_var.dtype)
+            + batch_var * batch_count
+            + delta.square()
+            * (self.state_count * batch_count / total_count).to(self.state_var.dtype)
+        ) / total_count.to(self.state_var.dtype)
+        self.state_mean.copy_(new_mean)
+        self.state_var.copy_(new_var.clamp_min(0.0))
+        self.state_std.copy_(self.state_var.sqrt().clamp_min(0.05))
+        self.state_count.copy_(total_count)
+
+    def normalize_states(self, states):
+        normailzed = (states - self.state_mean) / self.state_std
+        return normailzed.clamp(
+            -self.normalization_clip,
+            self.normalization_clip,
+        )
+
 
     def normalize(self, pairs):
         """相邻两帧分别使用同一套单帧统计量进行归一化。"""
@@ -67,11 +143,8 @@ class AMPDiscriminator(nn.Module):
         if pairs.ndim != 2 or pairs.shape[1] != expected_dim:
             raise ValueError(f"判别器输入必须为 [批量, {expected_dim}]")
 
-        # 单帧统计量都是 80 维，两帧输入则需要 160 维，所以重复两遍：
-        mean = self.state_mean.repeat(2)
-        std = self.state_std.repeat(2)
-
-        return (pairs - mean) / std
+        states = pairs.reshape(-1, 2, self.state_mean.numel())
+        return self.normalize_states(states).flatten(start_dim=1)
 
     def forward(self, pairs):
         """输出判别分数，不使用 Sigmoid。"""
@@ -167,6 +240,7 @@ class AMPDiscriminator(nn.Module):
         )
 
         self.optimizer.step()                       # 更新参数
+        self.update_normalization(reference_pairs, policy_pairs)
 
         return {
             "loss": loss.item(),
@@ -185,7 +259,9 @@ class AMPWindowDiscriminator(AMPDiscriminator):
         num_steps=5,        # 滑动窗口长度
         learning_rate=1e-4,
         gradient_penalty=10.0,
-        weight_decay=0.0,       # 权重衰减，默认 0
+        trunk_weight_decay=1.0e-3,
+        head_weight_decay=1.0e-1,
+        normalization_clip=10.0,
     ):
         if num_steps < 2:
             raise ValueError("滑动窗口长度必须至少为 2")
@@ -195,6 +271,9 @@ class AMPWindowDiscriminator(AMPDiscriminator):
             reference_states=reference_states,
             learning_rate=learning_rate,
             gradient_penalty=gradient_penalty,
+            trunk_weight_decay=trunk_weight_decay,
+            head_weight_decay=head_weight_decay,
+            normalization_clip=normalization_clip,
         )
 
         self.num_steps = num_steps
@@ -207,10 +286,10 @@ class AMPWindowDiscriminator(AMPDiscriminator):
         ).to(reference_states.device)
 
         # 网络第一层被替换后，必须重新创建优化器。
-        self.optimizer = torch.optim.Adam(
-            self.network.parameters(),
-            lr=learning_rate,
-            weight_decay=weight_decay,
+        self.configure_optimizer(
+            learning_rate,
+            trunk_weight_decay,
+            head_weight_decay,
         )
 
     def normalize(self, windows):
@@ -218,10 +297,7 @@ class AMPWindowDiscriminator(AMPDiscriminator):
         if windows.ndim != 3 or windows.shape[1:] != (self.num_steps, self.state_dim):
             raise ValueError(f"判别器输入必须为 [批量, {self.num_steps}, {self.state_dim}]")
 
-        normalized = (
-            windows - self.state_mean[None, None, :]
-        ) / self.state_std[None, None, :]
-
+        normalized = self.normalize_states(windows)
         return normalized.flatten(start_dim=1)  # 展开时间维，变为 [批量, num_steps * state_dim]
 
     @torch.no_grad()

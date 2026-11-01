@@ -23,83 +23,19 @@
   "loop": false,
   "mujoco_xml": "/home/panda/robotics_ws/retarget/motion_data/retargeted/x2_getup_v0_20261018/calibration/x2_reference_v3_segments/x2_reference.xml",
   "local_repair": {
-    "mode": "joint temporal legs chain optimization",
-    "interval_s": [
-      0,
-      3.8
-    ],
-    "sigma_s": 0.07,
-    "joint_names": [
-      "left_hip_pitch_joint",
-      "left_hip_roll_joint",
-      "left_hip_yaw_joint",
-      "left_knee_joint",
-      "left_ankle_pitch_joint",
-      "left_ankle_roll_joint",
-      "right_hip_pitch_joint",
-      "right_hip_roll_joint",
-      "right_hip_yaw_joint",
-      "right_knee_joint",
-      "right_ankle_pitch_joint",
-      "right_ankle_roll_joint"
-    ],
-    "max_joint_change_rad": 0.0744193350522723,
-    "targets": "smoothed world chain poses",
-    "reference": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/logs/retarget_quality/prone_getup2_build/1_final_pose.npz",
-    "iterations": [
-      {
-        "iteration": 0,
-        "max_update": 0.07157864436685621
-      },
-      {
-        "iteration": 1,
-        "max_update": 0.020768801567042156
-      },
-      {
-        "iteration": 2,
-        "max_update": 0.030049038753845007
-      },
-      {
-        "iteration": 3,
-        "max_update": 0.0035565781442334927
-      },
-      {
-        "iteration": 4,
-        "max_update": 0.0010449805089951655
-      },
-      {
-        "iteration": 5,
-        "max_update": 0.0002757521596417783
-      },
-      {
-        "iteration": 6,
-        "max_update": 0.00038335574938123224
-      },
-      {
-        "iteration": 7,
-        "max_update": 0.0002106529919628546
-      },
-      {
-        "iteration": 8,
-        "max_update": 0.00035139460142819814
-      },
-      {
-        "iteration": 9,
-        "max_update": 0.00014166105150798794
-      },
-      {
-        "iteration": 10,
-        "max_update": 0.0006458141249815891
-      },
-      {
-        "iteration": 11,
-        "max_update": 4.4122718068420705e-05
-      }
-    ],
-    "limitation": "kinematic/native geometry only; requires visual review and independent audit",
-    "source": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/logs/retarget_quality/prone_getup2_build/1_final_pose.npz",
-    "source_sha256": "6a93b8c27b42930f51963b9d20ac1dc4874a9061e28fad1dedd234b96af84963",
-    "output": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/logs/retarget_quality/prone_getup2_build/1_final_complete.npz"
+    "mode": "localized velocity-jump repair with constrained arm refinement",
+    "date": "2026-10-31",
+    "backup": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/logs/retarget_quality/reference_velocity_repair_20261031/before/x2_getup_v0_50hz.npz",
+    "source_sha256": "14ebcbae73817df679c522ef30f2ff2c10583606c677a56d77d125d40a96da9b",
+    "candidate_pipeline_output": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/logs/retarget_quality/reference_velocity_repair_20261031/candidates/x2_getup_v0_50hz.npz",
+    "work_directory": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/logs/retarget_quality/reference_velocity_repair_20261031",
+    "root_and_leg_trajectories_unchanged": true,
+    "endpoint_joint_poses_unchanged": true,
+    "max_joint_change_rad": 0.04301758110523224,
+    "max_wrist_position_change_m": 0.008730935864150524,
+    "constrained_refinement": false,
+    "source": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/logs/retarget_quality/reference_velocity_repair_20261031/before/x2_getup_v0_50hz.npz",
+    "output": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/logs/retarget_quality/reference_velocity_repair_20261031/final/x2_getup_v0_50hz.npz"
   },
   "support_repair": {
     "source": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/logs/retarget_quality/prone_getup2_build/1_stage1_legs.npz",
@@ -510,5 +446,18 @@
       "arm collision clearance and early arm smoothing",
       "early leg temporal smoothing"
     ]
+  },
+  "velocity_jump_repair": {
+    "mode": "localized velocity-jump repair with constrained arm refinement",
+    "date": "2026-10-31",
+    "backup": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/logs/retarget_quality/reference_velocity_repair_20261031/before/x2_getup_v0_50hz.npz",
+    "source_sha256": "14ebcbae73817df679c522ef30f2ff2c10583606c677a56d77d125d40a96da9b",
+    "candidate_pipeline_output": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/logs/retarget_quality/reference_velocity_repair_20261031/candidates/x2_getup_v0_50hz.npz",
+    "work_directory": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/logs/retarget_quality/reference_velocity_repair_20261031",
+    "root_and_leg_trajectories_unchanged": true,
+    "endpoint_joint_poses_unchanged": true,
+    "max_joint_change_rad": 0.04301758110523224,
+    "max_wrist_position_change_m": 0.008730935864150524,
+    "constrained_refinement": false
   }
 }

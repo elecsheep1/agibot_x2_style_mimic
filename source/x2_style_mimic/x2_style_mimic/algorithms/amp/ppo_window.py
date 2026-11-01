@@ -73,7 +73,9 @@ class AMPWindowPPO(PPO):
             num_steps=self.amp_num_steps,
             learning_rate=amp_cfg["learning_rate"],
             gradient_penalty=amp_cfg["gradient_penalty"],
-            weight_decay=amp_cfg.get("weight_decay", 0.0)
+            trunk_weight_decay=amp_cfg["trunk_weight_decay"],
+            head_weight_decay=amp_cfg["head_weight_decay"],
+            normalization_clip=amp_cfg["normalization_clip"],
         )
         self.amp_buffer = AMPWindowReplayBuffer(
             capacity=amp_cfg["buffer_capacity"],
@@ -459,10 +461,14 @@ class AMPWindowPPO(PPO):
                 )
             # optimizer.load_state_dict 会恢复旧参数组设置，
             # 因此最后重新应用当前实验指定的权重衰减。
-            weight_decay = float(self.amp_cfg.get("weight_decay", 0.0))
+            decay_by_name = {
+                "amp_trunk": float(self.amp_cfg["trunk_weight_decay"]),
+                "amp_head": float(self.amp_cfg["head_weight_decay"]),
+            }
             for group in self.amp_discriminator.optimizer.param_groups:
-                group["weight_decay"] = weight_decay
-            print(f"[AMP resume] discriminator weight_decay={weight_decay:g}")
+                group["weight_decay"] = decay_by_name[group["name"]]
+
+            print(f"[AMP resume] discriminator weight_decay={decay_by_name}")
 
         restore_curriculum = (
             load_cfg is None
