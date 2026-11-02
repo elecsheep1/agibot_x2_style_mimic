@@ -41,10 +41,11 @@ class FeatureErrorTests(unittest.TestCase):
 
     def test_sensitivity_reproduces_old_and_clipped_checkpoint_scores(self):
         # Force an extreme feature so missing clipping cannot silently pass.
-        for running in (False, True):
-            with self.subTest(running=running), tempfile.TemporaryDirectory() as directory:
-                net = torch.nn.Sequential(torch.nn.Linear(1165,256),torch.nn.ELU(),
-                    torch.nn.Linear(256,128),torch.nn.ELU(),torch.nn.Linear(128,1))
+        for running, widths in ((False, (256, 128)), (True, (256, 128)), (True, (1024, 512))):
+            with self.subTest(running=running, widths=widths), tempfile.TemporaryDirectory() as directory:
+                a, b = widths
+                net = torch.nn.Sequential(torch.nn.Linear(1165,a),torch.nn.ELU(),
+                    torch.nn.Linear(a,b),torch.nn.ELU(),torch.nn.Linear(b,1))
                 with torch.no_grad():
                     for parameter in net.parameters(): parameter.zero_()
                     net[0].weight[0,0]=1

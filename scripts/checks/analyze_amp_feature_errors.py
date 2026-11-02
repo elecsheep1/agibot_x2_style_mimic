@@ -116,8 +116,19 @@ def sensitivity(data, refs, matches, group_sets, mask, device, max_samples=1024)
     normalization=checkpoint_normalization(ckpt)
     if not torch.equal(data['state_std'],state['state_std']) or not torch.equal(data['state_mean'],state['state_mean']):
         raise ValueError('Capture normalization differs from checkpoint')
-    net=nn.Sequential(nn.Linear(5*233,256),nn.ELU(),nn.Linear(256,128),nn.ELU(),nn.Linear(128,1)).to(device)
-    net.load_state_dict({k.removeprefix('network.'):v for k,v in state.items() if k.startswith('network.')})
+    # Reconstruct both the original and enlarged ELU networks from checkpoint shapes.
+    network_state = {k.removeprefix("network."): v for k, v in state.items()
+                     if k.startswith("network.")}
+    linear_indices = sorted(int(k.split(".")[0]) for k in network_state
+                            if k.endswith(".weight"))
+    layers = []
+    for index in linear_indices:
+        weight = network_state[f"{index}.weight"]
+        layers.append(nn.Linear(weight.shape[1], weight.shape[0]))
+        if index != linear_indices[-1]:
+            layers.append(nn.ELU())
+    net = nn.Sequential(*layers).to(device)
+    net.load_state_dict(network_state)
     net.eval()
     mean=data['state_mean'].to(device);std=data['state_std'].to(device)
     w=data['windows'][ids].to(device);r=refs[matches[ids]].to(device)

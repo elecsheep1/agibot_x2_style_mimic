@@ -188,7 +188,7 @@ class GetUpEventsCfg:
 class GetUpRewardsCfg:
     standing = RewTerm(
         func=getup_mdp.standing_quality_reward,
-        weight=00.0,
+        weight=20.0,
         params={
             "torso_cfg": SceneEntityCfg(
                 "robot",
@@ -312,10 +312,10 @@ class X2MultiMotionGetUpEnvCfg(X2StyleMimicEnvCfg):
     # 保留现有环境所需字段，默认使用零辅助力。
     assist_force_levels: tuple = (200.0, 150.0, 100.0, 50.0, 0.0)
     assist_initial_stage: int = 0
-    assist_zero_probability: float = 0.10
+    assist_zero_probability: float = 1.0
     assist_full_until_s: float = 2.0
     assist_zero_after_s: float = 5.0
-    assist_curriculum_enabled: bool = True
+    assist_curriculum_enabled: bool = False
     assist_curriculum_window: int = 64
     assist_curriculum_threshold: float = 0.80
 

@@ -56,11 +56,11 @@ class AMPDiscriminator(nn.Module):
 
         # 相邻两帧输入
         self.network = nn.Sequential(
-            nn.Linear(2 * AMP_STATE_DIM, 256),
+            nn.Linear(2 * AMP_STATE_DIM, 1024),
             nn.ELU(),
-            nn.Linear(256, 128),
+            nn.Linear(1024, 512),
             nn.ELU(),
-            nn.Linear(128, 1),
+            nn.Linear(512, 1),
         ).to(states.device)
 
         self.gradient_penalty = gradient_penalty
@@ -99,9 +99,9 @@ class AMPDiscriminator(nn.Module):
     def update_normalization(self, reference, policy):
         """参考和策略共同更新同一个统计器；支持窗口或帧对。"""
         state_dim = self.state_mean.numel()
-        samples = torch.cat(
+        samples = torch.cat(                                # 把参考数据和策略数据整理成二维样本矩阵
             [
-                reference.detach().reshape(-1, state_dim),
+                reference.detach().reshape(-1, state_dim),  # 将所有帧整理到样本维,这里的 -1 表示让 PyTorch 自动计算这一维的长度。
                 policy.detach().reshape(-1, state_dim),
             ],
             dim=0,
@@ -111,17 +111,17 @@ class AMPDiscriminator(nn.Module):
             return
         if not torch.isfinite(samples).all():
             raise ValueError("AMP 标准化样本包含 NaN/Inf")
-        batch_mean = samples.mean(dim=0)
-        batch_var = samples.var(dim=0, unbiased=False)
-        batch_count = samples.shape[0]
+        batch_mean = samples.mean(dim=0)                    # 计算当前批次的均值
+        batch_var = samples.var(dim=0, unbiased=False)      # 计算当前批次的方差
+        batch_count = samples.shape[0]                      # 计算当前批次的样本数量
 
-        total_count = self.state_count + batch_count    # 累计样本数量
-        delta = batch_mean - self.state_mean
-        new_mean = self.state_mean + delta * (batch_count / total_count).to(self.state_mean.dtype)
-        new_var = (
-            self.state_var * self.state_count.to(self.state_var.dtype)
-            + batch_var * batch_count
-            + delta.square()
+        total_count = self.state_count + batch_count        # 计算总样本数量=历史累计样本数+当前批次样本数
+        delta = batch_mean - self.state_mean                # 计算当前批次均值与历史累计均值的差值
+        new_mean = self.state_mean + delta * (batch_count / total_count).to(self.state_mean.dtype)  # 计算新的均值，按样本数加权平均
+        new_var = (                                         # 更新累计方差
+            self.state_var * self.state_count.to(self.state_var.dtype)  # 历史样本内部的离散程度
+            + batch_var * batch_count                       # 新批次内部的离散程度
+            + delta.square()                                # 两组均值不同产生的额外离散程度
             * (self.state_count * batch_count / total_count).to(self.state_var.dtype)
         ) / total_count.to(self.state_var.dtype)
         self.state_mean.copy_(new_mean)
@@ -130,6 +130,7 @@ class AMPDiscriminator(nn.Module):
         self.state_count.copy_(total_count)
 
     def normalize_states(self, states):
+        """对状态进行归一化。"""
         normailzed = (states - self.state_mean) / self.state_std
         return normailzed.clamp(
             -self.normalization_clip,
@@ -282,7 +283,7 @@ class AMPWindowDiscriminator(AMPDiscriminator):
         # 窗口长度 × 单帧特征维度。
         self.network[0] = nn.Linear(
             self.num_steps * self.state_dim,
-            256,
+            1024,
         ).to(reference_states.device)
 
         # 网络第一层被替换后，必须重新创建优化器。
