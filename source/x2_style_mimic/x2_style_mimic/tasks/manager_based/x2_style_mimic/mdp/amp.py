@@ -17,9 +17,9 @@ AMP_KEY_BODY_NAMES = (
     "right_ankle_roll_link",
 )
 
-# 根状态 10 + 关节状态 58 + 11 个刚体 × 15。
-AMP_STATE_DIM = 68 + 15 * len(AMP_KEY_BODY_NAMES)
-AMP_FEATURE_VERSION = "x2_amp_relative_body_v1_233"
+# 根状态 10 + 11 个刚体 × 15，不直接输入关节状态。
+AMP_STATE_DIM = 10 + 15 * len(AMP_KEY_BODY_NAMES)
+AMP_FEATURE_VERSION = "x2_amp_relative_body_v2_175_finite_difference"
 
 def normalize_quaternion(q):
     norm = q.norm(dim=-1, keepdim=True)
@@ -118,8 +118,6 @@ def build_amp_state(
     root_quat_xyzw,     # 根四元数
     root_lin_vel_w,     # 根线速度
     root_ang_vel_w,     # 根角速度
-    joint_pos,          # 关节位置
-    joint_vel,          # 关节速度
     key_pose_w,          # 关键刚体位置
     key_vel_w,          # 关键刚体速度
     ground_height=0.0,  # 地面高度基准
@@ -146,8 +144,6 @@ def build_amp_state(
             inverse_rotate(root_q, gravity_w),  # 根坐标系中的重力方向
             inverse_rotate(root_q, root_lin_vel_w),  # 根坐标系中的线速度
             inverse_rotate(root_q, root_ang_vel_w) * 0.25,  # 根坐标系中的角速度，缩放
-            joint_pos,  # 关节位置
-            joint_vel * 0.05,  # 关节速度
             position.flatten(start_dim=1),  # 关键刚体相对位置
             rotation.flatten(start_dim=1),  # 关键刚体相对旋转
             linear.flatten(start_dim=1),  # 关键刚体相对线速度
@@ -174,8 +170,7 @@ def amp_observation(env, asset_cfg):
         root_quat_xyzw=root_pose[:, 3:7],
         root_lin_vel_w=root_velocity[:, :3],
         root_ang_vel_w=root_velocity[:, 3:6],
-        joint_pos=robot.data.joint_pos.torch[:, asset_cfg.joint_ids],
-        joint_vel=robot.data.joint_vel.torch[:, asset_cfg.joint_ids],
+        # 不直接输入关节状态，而是通过刚体特征推导。
         key_pose_w=robot.data.body_link_pose_w.torch[:, asset_cfg.body_ids],
         key_vel_w=robot.data.body_link_vel_w.torch[:, asset_cfg.body_ids],
         ground_height=env.scene.env_origins[:, 2:3],
@@ -348,8 +343,6 @@ class AMPReferenceMotion:
                 root_quat_xyzw=tensor("root_quat_xyzw"),
                 root_lin_vel_w=tensor("root_lin_vel_w"),
                 root_ang_vel_w=tensor("root_ang_vel_w"),
-                joint_pos=tensor("joint_pos", joint_ids),
-                joint_vel=tensor("joint_vel", joint_ids),
                 key_pose_w=body_pose,
                 key_vel_w=body_velocity,
                 ground_height=float(metadata["ground_z"]),

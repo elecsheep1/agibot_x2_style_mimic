@@ -2,29 +2,31 @@
 import argparse
 import json
 from pathlib import Path
+import sys
 
 import torch
 from torch import nn
 
-BLOCKS = {
-    'root_height': (0, 1), 'root_gravity': (1, 4), 'root_linear': (4, 7),
-    'root_angular_scaled': (7, 10), 'joint_position': (10, 39),
-    'joint_velocity_scaled': (39, 68), 'body_position': (68, 101),
-    'body_rotation6d': (101, 167), 'body_linear': (167, 200),
-    'body_angular_scaled': (200, 233),
-}
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from common.amp_feature_layout import feature_blocks
+
+BLOCKS = feature_blocks(175)
 
 
-def groups(joints, bodies):
-    result = {k: list(range(a, b)) for k, (a, b) in BLOCKS.items()}
-    joint = {name: [10+i, 39+i] for i, name in enumerate(joints)}
+def groups(joints, bodies, state_dim=175):
+    blocks = feature_blocks(state_dim, len(bodies), len(joints))
+    result = {k: list(range(a, b)) for k, (a, b) in blocks.items()}
+    joint = ({name: [blocks['joint_position'][0]+i, blocks['joint_velocity_scaled'][0]+i]
+              for i, name in enumerate(joints)} if 'joint_position' in blocks else {})
     body = {}
     body_components = {}
     for i, name in enumerate(bodies):
         components = {
             k: list(range(start+i*width, start+(i+1)*width))
-            for k, start, width in [('position',68,3),('rotation6d',101,6),
-                                     ('linear',167,3),('angular_scaled',200,3)]
+            for k, start, width in [('position',blocks['body_position'][0],3),
+                                   ('rotation6d',blocks['body_rotation6d'][0],6),
+                                   ('linear',blocks['body_linear'][0],3),
+                                   ('angular_scaled',blocks['body_angular_scaled'][0],3)]
         }
         body[name] = sum(components.values(), [])
         body_components.update({name+'/'+k: v for k, v in components.items()})
@@ -67,13 +69,14 @@ def error_rows(sse, raw_sse, group, count, total):
 def mismatch(windows, refs, matches, std, mask, group_sets):
     ids=mask.nonzero().flatten()
     if not len(ids):return dict(count=0)
-    sse=torch.zeros(233,dtype=torch.float64);raw_sse=torch.zeros_like(sse)
+    state_dim=windows.shape[-1]
+    sse=torch.zeros(state_dim,dtype=torch.float64);raw_sse=torch.zeros_like(sse)
     for chunk in ids.split(256):
         delta=(windows[chunk]-refs[matches[chunk]]).double()
         raw_sse+=delta.square().sum((0,1))
         sse+=(delta/std.double()).square().sum((0,1))
     count=len(ids)*windows.shape[1];total=float(sse.sum())
-    return dict(count=len(ids),normalized_rms=(total/(count*233))**.5,
+    return dict(count=len(ids),normalized_rms=(total/(count*state_dim))**.5,
                 **{k:error_rows(sse,raw_sse,g,count,total) for k,g in group_sets.items()})
 
 
@@ -153,9 +156,12 @@ def sensitivity(data, refs, matches, group_sets, mask, device, max_samples=1024)
 def analyze(path, output, device='cpu'):
     d=torch.load(path,map_location='cpu',weights_only=False)
     w=d['windows'];refs=d['reference_windows'];std=d['state_std']
-    if w.ndim!=3 or w.shape[1:]!=(5,233) or len(d['joint_names'])!=29 or len(d['body_names'])!=11:
-        raise ValueError('Expected five-state AMP233 windows with named joints/bodies')
-    gs=groups(d['joint_names'],d['body_names'])
+    if w.ndim!=3 or w.shape[1]<2 or len(d['joint_names'])!=29 or len(d['body_names'])!=11:
+        raise ValueError('Expected AMP windows with named joints/bodies')
+    num_steps,state_dim=w.shape[1:]
+    if refs.ndim!=3 or refs.shape[1:]!=w.shape[1:] or std.shape!=(state_dim,):
+        raise ValueError('Capture/reference/statistic dimensions disagree')
+    gs=groups(d['joint_names'],d['body_names'],state_dim)
     checkpoint=torch.load(d['checkpoint'],map_location='cpu',weights_only=False)['amp_window']
     normalization=checkpoint_normalization(checkpoint)
     # Descriptive distances stay unclipped, even when D inputs are clipped.
@@ -167,12 +173,13 @@ def analyze(path, output, device='cpu'):
             'post_fade_hold_ge_050':d['hold_s']>=.50}
     report=dict(checkpoint=d['checkpoint'],capture=str(Path(path).resolve()),
         definitions=dict(phase='Window endpoint hold_seconds; pre-fade includes failures, prone stillness and recovery. Complete valid windows only.',
-                         matching='Nearest whole 5-state window across all clips/phases. Same-birth-motion matching also reported.',
+                         matching=f'Nearest whole {num_steps}-state window across all clips/phases. Same-birth-motion matching also reported.',
                          normalization=normalization,
                          distance='Unclipped differences divided by checkpoint std (floor 0.05), for both matching and error blocks; scaled feature units are preserved. D scoring separately applies checkpoint clipping.',
                          errors='Aggregate normalized RMS and squared-error share, not discriminator importance.',
-                         sensitivity='Replace selected features across all five states with nearest-reference values. Hybrid inputs can be physically inconsistent/out of distribution; descriptive sensitivity, not causal proof or a reduced-feature retraining result.'),
-        dimensions=233,reference_files=d['reference_files'],reference_window_counts=d['reference_window_counts'],
+                         sensitivity=f'Replace selected features across all {num_steps} states with nearest-reference values. Hybrid inputs can be physically inconsistent/out of distribution; descriptive sensitivity, not causal proof or a reduced-feature retraining result.'),
+        dimensions=state_dim,num_steps=num_steps,feature_version=d.get('feature_version'),
+        reference_files=d['reference_files'],reference_window_counts=d['reference_window_counts'],
         phases={})
     for name,mask in phases.items():
         report['phases'][name]=dict(scores=score_stats(d['score'],mask),errors=mismatch(w,refs,match,std,mask,gs))
@@ -192,7 +199,7 @@ def analyze(path, output, device='cpu'):
     report['pre_fade_nearest_motion_counts']={str(i):int((match_motion[mask]==i).sum()) for i in range(len(d['reference_files']))}
     output=Path(output);output.mkdir(parents=True,exist_ok=True)
     (output/'feature_errors.json').write_text(json.dumps(report,ensure_ascii=False,indent=2))
-    lines=['# AMP233 特征误差分析','',f"检查点：`{d['checkpoint']}`",'',
+    lines=[f'# AMP{state_dim} 特征误差分析','',f"检查点：`{d['checkpoint']}`",'',
            '仅描述当前策略与参考的差异；高误差不等于特征不重要。混合替换输入可能不满足物理一致性。',
            f"标准化：{normalization['mode']}；D 输入裁剪：{normalization['clip']}。匹配和误差统计均使用未裁剪距离。",'',
            '|阶段|窗口数|P10 / P50 / P90|原始风格奖励|零奖励比例|归一化 RMS|',

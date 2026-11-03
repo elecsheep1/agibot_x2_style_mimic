@@ -22,6 +22,7 @@ from common.x2_motion_utils import (
     load_motion,
     policy_joint_names,
 )
+from common.amp_feature_layout import feature_blocks
 
 
 def arguments():
@@ -159,25 +160,10 @@ def main():
         amp_env = SimpleNamespace(scene=scene)
 
         amp_feature_blocks = {
-            "height": slice(0, 1),
-            "gravity": slice(1, 4),
-            "linear_velocity": slice(4, 7),
-            "angular_velocity_scaled": slice(7, 10),
-            "joint_position": slice(10, 39),
-            "joint_velocity_scaled": slice(39, 68),
+            name: slice(lo, hi) for name, (lo, hi) in feature_blocks(
+                AMP_STATE_DIM, len(AMP_KEY_BODY_NAMES), len(policy_joint_names())
+            ).items()
         }
-        offset = 68
-        for name, width in (
-            ("body_relative_position", 3),
-            ("body_relative_rotation_6d", 6),
-            ("body_relative_linear_velocity", 3),
-            ("body_relative_angular_scaled", 3),
-        ):
-            end = offset + width * len(AMP_KEY_BODY_NAMES)
-            amp_feature_blocks[name] = slice(offset, end)
-            offset = end
-        if offset != AMP_STATE_DIM:
-            raise ValueError("AMP feature blocks do not cover the current feature layout")
 
 
         amp_max_errors = {

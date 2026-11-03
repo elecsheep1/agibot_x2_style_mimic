@@ -1,14 +1,13 @@
 """Inference-only AMP capture; uses true terminal states and training history semantics."""
 import json
 from pathlib import Path
+import sys
 import torch
 from x2_style_mimic.algorithms.amp.history import AMPHistory
+from x2_style_mimic.tasks.manager_based.x2_style_mimic.mdp.amp import AMP_FEATURE_VERSION, AMP_KEY_BODY_NAMES
 
-BLOCKS = {"root_height": (0, 1), "root_gravity": (1, 4),
-          "root_linear": (4, 7), "root_angular_scaled": (7, 10),
-          "joint_position": (10, 39), "joint_velocity_scaled": (39, 68),
-          "body_position": (68, 101), "body_rotation6d": (101, 167),
-          "body_linear": (167, 200), "body_angular_scaled": (200, 233)}
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from common.amp_feature_layout import feature_blocks
 
 class AMPWindowAudit:
     def __init__(self, env, algorithm, output, checkpoint, quota):
@@ -16,7 +15,9 @@ class AMPWindowAudit:
         self.output = Path(output).resolve()
         self.checkpoint = str(Path(checkpoint).resolve())
         self.quota = quota
-        self.history = AMPHistory(env.num_envs, 233, algorithm.amp_num_steps, env.device)
+        self.state_dim = algorithm.amp_discriminator.state_mean.numel()
+        self.blocks = feature_blocks(self.state_dim, len(AMP_KEY_BODY_NAMES), len(algorithm.amp_cfg['joint_names']))
+        self.history = AMPHistory(env.num_envs, self.state_dim, algorithm.amp_num_steps, env.device)
         self.episodes = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
         self.times = torch.zeros(env.num_envs, device=env.device)
         self.rows = []
@@ -57,7 +58,9 @@ class AMPWindowAudit:
         data["standing"] = standing
         data["style_reward"] = (1 - .25 * (data["score"] - 1).square()).clamp(0, 1)
         data["checkpoint"] = self.checkpoint
-        data["feature_version"] = "x2_amp_relative_body_v1_233_window_v1"
+        data["feature_version"] = AMP_FEATURE_VERSION + "_window_v1"
+        data["state_dim"] = self.state_dim
+        data["num_steps"] = self.alg.amp_num_steps
         self.output.parent.mkdir(parents=True, exist_ok=True)
         torch.save(data, self.output)
         device = self.alg.device
@@ -69,7 +72,6 @@ class AMPWindowAudit:
         data["state_mean"] = d.state_mean.cpu()
         data["state_std"] = d.state_std.cpu()
         data["joint_names"] = list(self.alg.amp_cfg["joint_names"])
-        from x2_style_mimic.tasks.manager_based.x2_style_mimic.mdp.amp import AMP_KEY_BODY_NAMES
         data["body_names"] = list(AMP_KEY_BODY_NAMES)
         data["step_dt"] = self.env.step_dt
         data["normalization"] = {
@@ -94,7 +96,7 @@ class AMPWindowAudit:
         data["reference_files"] = [str(p) for p in self.alg.amp_reference.paths]
         torch.save(data, self.output)
         errors = {}
-        for name, (lo, hi) in BLOCKS.items():
+        for name, (lo, hi) in self.blocks.items():
             delta = (data["windows"][:, :, lo:hi] - reference[match.to(device), :, lo:hi].cpu()) / d.state_std[lo:hi].cpu()
             errors[name] = delta.square().mean((1, 2)).sqrt()
         def stats(mask):
