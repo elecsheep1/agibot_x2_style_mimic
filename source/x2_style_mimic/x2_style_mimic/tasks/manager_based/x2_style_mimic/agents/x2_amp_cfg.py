@@ -27,7 +27,7 @@ class MultiMotionAMPAlgorithmCfg(RslRlPpoAlgorithmCfg):
 
         "step_dt": 0.02,
         "num_steps": 5,
-        "style_reward_weight": 30.0,
+        "style_reward_weight": 10.0,
 
         # 环境通过 extras 提供门控；默认关闭，保持原版 AMP 行为。
         "reward_gate_enabled": True,
@@ -56,7 +56,7 @@ class X2MultiMotionAMPRunnerCfg(PPORunnerCfg):
             value_loss_coef=1.0,
             use_clipped_value_loss=True,
             clip_param=0.2,
-            entropy_coef=0.005,
+            entropy_coef=0.002,
             num_learning_epochs=5,
             num_mini_batches=4,
             learning_rate=1.0e-3,

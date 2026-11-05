@@ -1,0 +1,61 @@
+[
+  {
+    "file": "x2_lafan_subject2_prone_getup_umr_50hz.npz",
+    "geometry_hard_errors": 0,
+    "joint_speed_limit_events": 0,
+    "warnings": 46,
+    "minimum_surface_clearance_m": 0.0017999786127334133,
+    "frames": 340,
+    "isaac_fk_max_error_m": 6.164134538266808e-05,
+    "isaac_pose_mapping_passed": true,
+    "amp_strict_1e3_passed": false,
+    "amp_max_abs_error": 0.0122956782579422,
+    "amp_error_explanation": "Analytic J(q) qdot vs body-pose finite differences, independently reproduced in MuJoCo; see velocity_convention.json. Training implementation unchanged.",
+    "support_repair": {
+      "palm_down_dot_min_0to345": 0.981791893183095,
+      "palm_down_dot_mean_0to345": 0.9968428407887435,
+      "right_hand_palm_normal_local": [
+        0,
+        1,
+        0
+      ],
+      "root_trajectory_unchanged": true,
+      "left_arm_unchanged": true,
+      "time_axis_unchanged": true,
+      "frames": 340,
+      "duration_s": 6.78,
+      "warnings": 46,
+      "hard_errors": 0,
+      "speed_limit_events": 0,
+      "acceleration_spike_events": 0,
+      "isaac_full_clip_pose_passed": true,
+      "isaac_amp_tolerance": 0.02,
+      "isaac_amp_max_error": 0.0122956782579422
+    },
+    "latest_support_repair": {
+      "report_directory": "data/motions/lafan1_getup_umr/quality/lafan_prone_support_v2_20261105",
+      "isaac_pose_mapping_passed": true,
+      "isaac_amp_tolerance": 0.02,
+      "note": "Native kinematic geometry and full Isaac pose replay; not dynamics validation. See latest reports; earlier fields describe previous revision."
+    }
+  },
+  {
+    "file": "x2_lafan_subject2_supine_roll_getup_umr_50hz.npz",
+    "geometry_hard_errors": 0,
+    "joint_speed_limit_events": 0,
+    "warnings": 30,
+    "minimum_surface_clearance_m": 0.00199900875671543,
+    "frames": 284,
+    "isaac_fk_max_error_m": 6.255572952795774e-05,
+    "isaac_pose_mapping_passed": true,
+    "amp_strict_1e3_passed": false,
+    "amp_max_abs_error": 0.009851053357124329,
+    "amp_error_explanation": "Analytic J(q) qdot vs body-pose finite differences, independently reproduced in MuJoCo; see velocity_convention.json. Training implementation unchanged.",
+    "latest_support_repair": {
+      "report_directory": "data/motions/lafan1_getup_umr/quality/lafan_supine_support_20261105",
+      "isaac_pose_mapping_passed": true,
+      "isaac_amp_tolerance": 0.02,
+      "note": "Native kinematic geometry and full Isaac pose replay; not dynamics validation. See latest reports; earlier fields describe previous revision."
+    }
+  }
+]

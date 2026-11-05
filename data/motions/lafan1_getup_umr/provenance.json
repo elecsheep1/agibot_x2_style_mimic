@@ -1,0 +1,31 @@
+[
+  {
+    "file": "x2_lafan_subject2_prone_getup_umr_50hz.npz",
+    "frames": 340,
+    "duration_s": 6.78,
+    "bvh_frames": [
+      850,
+      1050
+    ],
+    "sha256": "3a3123b119ff560bb14cc29f81870e2b02312e31370cc867225f4e96226e6a56",
+    "raw_umr": "/home/panda/robotics_ws/retarget/motion_data/lafan1/umr_getup/raw/lafan_subject2_prone_getup_umr.npz",
+    "retiming": "/home/panda/robotics_ws/retarget/motion_data/lafan1/umr_getup/retiming.json",
+    "support_repair_report": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/logs/retarget_quality/lafan_prone_support_20261104/report.md",
+    "support_repair_backup": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/logs/retarget_quality/lafan_prone_support_20261104/before.npz",
+    "latest_support_repair": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/logs/retarget_quality/lafan_prone_support_v2_20261105",
+    "latest_support_backup": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/logs/retarget_quality/lafan_prone_support_v2_20261105/before.npz"
+  },
+  {
+    "file": "x2_lafan_subject2_supine_roll_getup_umr_50hz.npz",
+    "frames": 284,
+    "duration_s": 5.66,
+    "bvh_frames": [
+      1200,
+      1370
+    ],
+    "sha256": "a26f80c6418157b465a63f2831728076bd0e99b08f1e2faa1a2e6cdb96c5e9ce",
+    "raw_umr": "/home/panda/robotics_ws/retarget/motion_data/lafan1/umr_getup/raw/lafan_subject2_supine_roll_getup_umr.npz",
+    "latest_support_repair": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/logs/retarget_quality/lafan_supine_support_20261105",
+    "latest_support_backup": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/logs/retarget_quality/lafan_supine_support_20261105/before.npz"
+  }
+]

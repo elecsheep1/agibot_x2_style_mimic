@@ -1,0 +1,719 @@
+[
+  {
+    "motion": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/logs/retarget_quality/lafan_prone_support_20261104/final_candidate.npz",
+    "sha256": "10184826a9010883272fdc82eea1ad6e0435569555688f2c91dbdaaa7280e6f0",
+    "model": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/data/motions/lafan1_getup_umr/models/x2.xml",
+    "frames": 340,
+    "duration_s": 6.78,
+    "fps": 50.0,
+    "status": "review",
+    "thresholds": {
+      "penetration_m": 0.001,
+      "joint_limit_rad": 1e-05,
+      "joint_acceleration_rad_s2": 100.0,
+      "joint_jerk_rad_s3": 5000.0,
+      "joint_high_frequency_rad": 0.025,
+      "body_acceleration_m_s2": 35.0,
+      "body_angular_acceleration_rad_s2": 100.0,
+      "floating_m": 0.015,
+      "contact_height_m": 0.008,
+      "sliding_m_s": 0.08,
+      "flat_foot_degrees": 30.0,
+      "standing_root_height_m": 0.45,
+      "standing_tilt_degrees": 60.0,
+      "minimum_contact_duration_s": 0.1,
+      "joint_velocity_limits_rad_s": {
+        "left_hip_pitch_joint": 11.936,
+        "left_hip_roll_joint": 11.936,
+        "left_hip_yaw_joint": 11.936,
+        "left_knee_joint": 11.936,
+        "right_hip_pitch_joint": 11.936,
+        "right_hip_roll_joint": 11.936,
+        "right_hip_yaw_joint": 11.936,
+        "right_knee_joint": 11.936,
+        "waist_yaw_joint": 11.936,
+        "left_ankle_pitch_joint": 13.087,
+        "right_ankle_pitch_joint": 13.088,
+        "left_ankle_roll_joint": 15.077,
+        "right_ankle_roll_joint": 15.077,
+        "waist_pitch_joint": 13.088,
+        "waist_roll_joint": 13.088,
+        "left_shoulder_pitch_joint": 13.088,
+        "left_shoulder_roll_joint": 13.088,
+        "right_shoulder_pitch_joint": 13.088,
+        "right_shoulder_roll_joint": 13.088,
+        "left_shoulder_yaw_joint": 15.077,
+        "left_elbow_joint": 15.077,
+        "left_wrist_yaw_joint": 15.077,
+        "right_shoulder_yaw_joint": 15.077,
+        "right_elbow_joint": 15.077,
+        "right_wrist_yaw_joint": 15.077,
+        "left_wrist_pitch_joint": 4.188,
+        "left_wrist_roll_joint": 4.188,
+        "right_wrist_pitch_joint": 4.188,
+        "right_wrist_roll_joint": 4.188,
+        "head_yaw_joint": 6.019,
+        "head_pitch_joint": 6.28
+      }
+    },
+    "events": [
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "left_wrist_pitch_joint",
+        "severity": "warning",
+        "start_s": 0.04,
+        "end_s": 0.04,
+        "peak_s": 0.04,
+        "peak": 0.030624548612081443,
+        "threshold": 0.025,
+        "frames": 1
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "right_elbow_joint",
+        "severity": "warning",
+        "start_s": 0.04,
+        "end_s": 0.06,
+        "peak_s": 0.04,
+        "peak": 0.03302657869087633,
+        "threshold": 0.025,
+        "frames": 2
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "right_wrist_yaw_joint",
+        "severity": "warning",
+        "start_s": 0.04,
+        "end_s": 0.04,
+        "peak_s": 0.04,
+        "peak": 0.025331434022234894,
+        "threshold": 0.025,
+        "frames": 1
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "right_elbow_joint",
+        "severity": "warning",
+        "start_s": 0.2,
+        "end_s": 0.26,
+        "peak_s": 0.22,
+        "peak": 0.028236958635270426,
+        "threshold": 0.025,
+        "frames": 4
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "left_wrist_pitch_joint",
+        "severity": "warning",
+        "start_s": 0.9,
+        "end_s": 0.96,
+        "peak_s": 0.92,
+        "peak": 0.028558130190369235,
+        "threshold": 0.025,
+        "frames": 4
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "left_wrist_pitch_joint",
+        "severity": "warning",
+        "start_s": 1.1,
+        "end_s": 1.16,
+        "peak_s": 1.12,
+        "peak": 0.030754515108782146,
+        "threshold": 0.025,
+        "frames": 4
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "left_knee_joint",
+        "severity": "warning",
+        "start_s": 2.06,
+        "end_s": 2.08,
+        "peak_s": 2.06,
+        "peak": 0.02530733831726295,
+        "threshold": 0.025,
+        "frames": 2
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "left_knee_joint",
+        "severity": "warning",
+        "start_s": 2.36,
+        "end_s": 2.46,
+        "peak_s": 2.4,
+        "peak": 0.028912550179085006,
+        "threshold": 0.025,
+        "frames": 6
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "left_hip_pitch_joint",
+        "severity": "warning",
+        "start_s": 2.4,
+        "end_s": 2.5,
+        "peak_s": 2.44,
+        "peak": 0.028176449443320317,
+        "threshold": 0.025,
+        "frames": 6
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "right_shoulder_yaw_joint",
+        "severity": "warning",
+        "start_s": 3.6,
+        "end_s": 3.7600000000000002,
+        "peak_s": 3.68,
+        "peak": 0.09940796847925881,
+        "threshold": 0.025,
+        "frames": 9
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "right_wrist_yaw_joint",
+        "severity": "warning",
+        "start_s": 3.6,
+        "end_s": 3.74,
+        "peak_s": 3.68,
+        "peak": 0.06935294501119404,
+        "threshold": 0.025,
+        "frames": 8
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "right_wrist_pitch_joint",
+        "severity": "warning",
+        "start_s": 3.64,
+        "end_s": 3.7,
+        "peak_s": 3.68,
+        "peak": 0.03459400766050291,
+        "threshold": 0.025,
+        "frames": 4
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "right_shoulder_roll_joint",
+        "severity": "warning",
+        "start_s": 3.68,
+        "end_s": 3.74,
+        "peak_s": 3.7,
+        "peak": 0.033379959712513854,
+        "threshold": 0.025,
+        "frames": 4
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "right_shoulder_pitch_joint",
+        "severity": "warning",
+        "start_s": 3.7600000000000002,
+        "end_s": 3.8200000000000003,
+        "peak_s": 3.8000000000000003,
+        "peak": 0.03412724865129091,
+        "threshold": 0.025,
+        "frames": 4
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "right_shoulder_yaw_joint",
+        "severity": "warning",
+        "start_s": 3.8000000000000003,
+        "end_s": 4.0,
+        "peak_s": 3.88,
+        "peak": 0.08643920175828362,
+        "threshold": 0.025,
+        "frames": 11
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "right_wrist_pitch_joint",
+        "severity": "warning",
+        "start_s": 3.8000000000000003,
+        "end_s": 3.92,
+        "peak_s": 3.86,
+        "peak": 0.042304935627135554,
+        "threshold": 0.025,
+        "frames": 7
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "right_wrist_yaw_joint",
+        "severity": "warning",
+        "start_s": 3.8000000000000003,
+        "end_s": 3.94,
+        "peak_s": 3.86,
+        "peak": 0.0747263151169194,
+        "threshold": 0.025,
+        "frames": 8
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "right_wrist_roll_joint",
+        "severity": "warning",
+        "start_s": 3.8200000000000003,
+        "end_s": 3.86,
+        "peak_s": 3.84,
+        "peak": 0.02760971388414557,
+        "threshold": 0.025,
+        "frames": 3
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "right_shoulder_roll_joint",
+        "severity": "warning",
+        "start_s": 3.86,
+        "end_s": 3.86,
+        "peak_s": 3.86,
+        "peak": 0.025550778536929997,
+        "threshold": 0.025,
+        "frames": 1
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "right_hip_roll_joint",
+        "severity": "warning",
+        "start_s": 3.88,
+        "end_s": 3.94,
+        "peak_s": 3.92,
+        "peak": 0.02851976567146075,
+        "threshold": 0.025,
+        "frames": 4
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "right_knee_joint",
+        "severity": "warning",
+        "start_s": 3.88,
+        "end_s": 3.94,
+        "peak_s": 3.92,
+        "peak": 0.02695624611318226,
+        "threshold": 0.025,
+        "frames": 4
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "right_shoulder_pitch_joint",
+        "severity": "warning",
+        "start_s": 3.94,
+        "end_s": 4.0200000000000005,
+        "peak_s": 3.98,
+        "peak": 0.030058471401473552,
+        "threshold": 0.025,
+        "frames": 5
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "right_wrist_roll_joint",
+        "severity": "warning",
+        "start_s": 4.04,
+        "end_s": 4.1,
+        "peak_s": 4.08,
+        "peak": 0.027739134708904552,
+        "threshold": 0.025,
+        "frames": 4
+      },
+      {
+        "check": "sole_proxy_sliding_m_s",
+        "subject": "right",
+        "severity": "warning",
+        "start_s": 4.1,
+        "end_s": 4.28,
+        "peak_s": 4.1,
+        "peak": 0.8763274920525158,
+        "threshold": 0.08,
+        "frames": 10
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "right_elbow_joint",
+        "severity": "warning",
+        "start_s": 4.14,
+        "end_s": 4.36,
+        "peak_s": 4.22,
+        "peak": 0.03451306387291919,
+        "threshold": 0.025,
+        "frames": 12
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "left_shoulder_pitch_joint",
+        "severity": "warning",
+        "start_s": 4.42,
+        "end_s": 4.54,
+        "peak_s": 4.48,
+        "peak": 0.03843509823233221,
+        "threshold": 0.025,
+        "frames": 7
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "left_shoulder_roll_joint",
+        "severity": "warning",
+        "start_s": 4.44,
+        "end_s": 4.6000000000000005,
+        "peak_s": 4.5200000000000005,
+        "peak": 0.04644568462149867,
+        "threshold": 0.025,
+        "frames": 9
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "left_wrist_yaw_joint",
+        "severity": "warning",
+        "start_s": 4.58,
+        "end_s": 4.6000000000000005,
+        "peak_s": 4.58,
+        "peak": 0.026304283092542978,
+        "threshold": 0.025,
+        "frames": 2
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "left_shoulder_pitch_joint",
+        "severity": "warning",
+        "start_s": 4.68,
+        "end_s": 4.72,
+        "peak_s": 4.7,
+        "peak": 0.028056394379595576,
+        "threshold": 0.025,
+        "frames": 3
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "left_elbow_joint",
+        "severity": "warning",
+        "start_s": 4.7,
+        "end_s": 4.76,
+        "peak_s": 4.72,
+        "peak": 0.028676220843547373,
+        "threshold": 0.025,
+        "frames": 4
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "left_shoulder_roll_joint",
+        "severity": "warning",
+        "start_s": 4.74,
+        "end_s": 4.8,
+        "peak_s": 4.76,
+        "peak": 0.02854522191637121,
+        "threshold": 0.025,
+        "frames": 4
+      },
+      {
+        "check": "sole_proxy_sliding_m_s",
+        "subject": "right",
+        "severity": "warning",
+        "start_s": 4.86,
+        "end_s": 5.0,
+        "peak_s": 4.94,
+        "peak": 0.1704971626725841,
+        "threshold": 0.08,
+        "frames": 8
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "left_elbow_joint",
+        "severity": "warning",
+        "start_s": 4.96,
+        "end_s": 5.0,
+        "peak_s": 4.98,
+        "peak": 0.026666590542299806,
+        "threshold": 0.025,
+        "frames": 3
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "left_ankle_pitch_joint",
+        "severity": "warning",
+        "start_s": 4.98,
+        "end_s": 5.0600000000000005,
+        "peak_s": 5.04,
+        "peak": 0.02920410643664606,
+        "threshold": 0.025,
+        "frames": 5
+      },
+      {
+        "check": "sole_proxy_sliding_m_s",
+        "subject": "right",
+        "severity": "warning",
+        "start_s": 5.08,
+        "end_s": 5.32,
+        "peak_s": 5.16,
+        "peak": 0.15213817408693717,
+        "threshold": 0.08,
+        "frames": 13
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "left_knee_joint",
+        "severity": "warning",
+        "start_s": 5.14,
+        "end_s": 5.3,
+        "peak_s": 5.22,
+        "peak": 0.04104843217004839,
+        "threshold": 0.025,
+        "frames": 9
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "left_ankle_pitch_joint",
+        "severity": "warning",
+        "start_s": 5.24,
+        "end_s": 5.38,
+        "peak_s": 5.3,
+        "peak": 0.03809504805097477,
+        "threshold": 0.025,
+        "frames": 8
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "left_knee_joint",
+        "severity": "warning",
+        "start_s": 5.46,
+        "end_s": 5.6000000000000005,
+        "peak_s": 5.54,
+        "peak": 0.04233270601239547,
+        "threshold": 0.025,
+        "frames": 8
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "left_ankle_pitch_joint",
+        "severity": "warning",
+        "start_s": 5.54,
+        "end_s": 5.64,
+        "peak_s": 5.58,
+        "peak": 0.0390025158139555,
+        "threshold": 0.025,
+        "frames": 6
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "right_knee_joint",
+        "severity": "warning",
+        "start_s": 5.5600000000000005,
+        "end_s": 5.66,
+        "peak_s": 5.62,
+        "peak": 0.03319985551283455,
+        "threshold": 0.025,
+        "frames": 6
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "left_elbow_joint",
+        "severity": "warning",
+        "start_s": 5.6000000000000005,
+        "end_s": 5.72,
+        "peak_s": 5.66,
+        "peak": 0.030687151755126596,
+        "threshold": 0.025,
+        "frames": 7
+      },
+      {
+        "check": "sole_proxy_sliding_m_s",
+        "subject": "right",
+        "severity": "warning",
+        "start_s": 5.6000000000000005,
+        "end_s": 5.66,
+        "peak_s": 5.62,
+        "peak": 0.08909754023373356,
+        "threshold": 0.08,
+        "frames": 4
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "left_knee_joint",
+        "severity": "warning",
+        "start_s": 5.72,
+        "end_s": 5.78,
+        "peak_s": 5.74,
+        "peak": 0.030201243692552115,
+        "threshold": 0.025,
+        "frames": 4
+      },
+      {
+        "check": "sole_proxy_sliding_m_s",
+        "subject": "left",
+        "severity": "warning",
+        "start_s": 5.72,
+        "end_s": 5.84,
+        "peak_s": 5.72,
+        "peak": 0.6044199087271699,
+        "threshold": 0.08,
+        "frames": 7
+      },
+      {
+        "check": "joint_high_frequency_rad",
+        "subject": "right_elbow_joint",
+        "severity": "warning",
+        "start_s": 5.82,
+        "end_s": 5.86,
+        "peak_s": 5.84,
+        "peak": 0.025989324569243744,
+        "threshold": 0.025,
+        "frames": 3
+      },
+      {
+        "check": "sole_proxy_sliding_m_s",
+        "subject": "right",
+        "severity": "warning",
+        "start_s": 5.98,
+        "end_s": 6.42,
+        "peak_s": 6.24,
+        "peak": 0.32796467216185204,
+        "threshold": 0.08,
+        "frames": 23
+      }
+    ],
+    "excluded_collision_body_pairs": [
+      [
+        "head_pitch_link",
+        "torso_link"
+      ],
+      [
+        "left_ankle_pitch_link",
+        "left_ankle_roll_link"
+      ],
+      [
+        "left_ankle_pitch_link",
+        "left_knee_link"
+      ],
+      [
+        "left_ankle_roll_link",
+        "left_ankle_roll_link"
+      ],
+      [
+        "left_ankle_roll_link",
+        "left_knee_link"
+      ],
+      [
+        "left_elbow_link",
+        "left_shoulder_yaw_link"
+      ],
+      [
+        "left_hip_pitch_link",
+        "left_hip_roll_link"
+      ],
+      [
+        "left_hip_pitch_link",
+        "pelvis"
+      ],
+      [
+        "left_hip_roll_link",
+        "left_hip_yaw_link"
+      ],
+      [
+        "left_hip_yaw_link",
+        "left_knee_link"
+      ],
+      [
+        "left_shoulder_pitch_link",
+        "left_shoulder_roll_link"
+      ],
+      [
+        "left_shoulder_pitch_link",
+        "torso_link"
+      ],
+      [
+        "left_shoulder_roll_link",
+        "left_shoulder_yaw_link"
+      ],
+      [
+        "left_wrist_pitch_link",
+        "left_wrist_roll_link"
+      ],
+      [
+        "pelvis",
+        "right_hip_pitch_link"
+      ],
+      [
+        "right_ankle_pitch_link",
+        "right_ankle_roll_link"
+      ],
+      [
+        "right_ankle_pitch_link",
+        "right_knee_link"
+      ],
+      [
+        "right_ankle_roll_link",
+        "right_ankle_roll_link"
+      ],
+      [
+        "right_ankle_roll_link",
+        "right_knee_link"
+      ],
+      [
+        "right_elbow_link",
+        "right_shoulder_yaw_link"
+      ],
+      [
+        "right_hip_pitch_link",
+        "right_hip_roll_link"
+      ],
+      [
+        "right_hip_roll_link",
+        "right_hip_yaw_link"
+      ],
+      [
+        "right_hip_yaw_link",
+        "right_knee_link"
+      ],
+      [
+        "right_shoulder_pitch_link",
+        "right_shoulder_roll_link"
+      ],
+      [
+        "right_shoulder_pitch_link",
+        "torso_link"
+      ],
+      [
+        "right_shoulder_roll_link",
+        "right_shoulder_yaw_link"
+      ],
+      [
+        "right_wrist_pitch_link",
+        "right_wrist_roll_link"
+      ]
+    ],
+    "contact_mode": "geometry heuristic",
+    "minimum_surface_clearance_m": 0.0017999786127334133,
+    "peak_joint_speed_rad_s": {
+      "left_hip_pitch_joint": 3.6052346229553223,
+      "left_hip_roll_joint": 1.093989610671997,
+      "left_hip_yaw_joint": 1.6260914504528046,
+      "left_knee_joint": 4.172617197036743,
+      "left_ankle_pitch_joint": 2.4788977578282356,
+      "left_ankle_roll_joint": 0.8175596594810486,
+      "right_hip_pitch_joint": 2.4579092860221863,
+      "right_hip_roll_joint": 1.8154531717300415,
+      "right_hip_yaw_joint": 1.5313401818275452,
+      "right_knee_joint": 2.782130241394043,
+      "right_ankle_pitch_joint": 1.8432545475661755,
+      "right_ankle_roll_joint": 1.170136034488678,
+      "waist_yaw_joint": 1.0697605088353157,
+      "waist_pitch_joint": 0.9587593376636505,
+      "waist_roll_joint": 1.4543764293193817,
+      "left_shoulder_pitch_joint": 2.4016067385673523,
+      "left_shoulder_roll_joint": 4.595810174942017,
+      "left_shoulder_yaw_joint": 2.223646640777588,
+      "left_elbow_joint": 2.694299817085266,
+      "left_wrist_yaw_joint": 1.971288025379181,
+      "left_wrist_pitch_joint": 3.1043630093336105,
+      "left_wrist_roll_joint": 1.6800671815872192,
+      "right_shoulder_pitch_joint": 2.3889124393463135,
+      "right_shoulder_roll_joint": 2.334243804216385,
+      "right_shoulder_yaw_joint": 7.781125605106354,
+      "right_elbow_joint": 3.338932991027832,
+      "right_wrist_yaw_joint": 5.045822262763977,
+      "right_wrist_pitch_joint": 2.729181945323944,
+      "right_wrist_roll_joint": 2.895234525203705,
+      "head_yaw_joint": 1.0960489511489868,
+      "head_pitch_joint": 0.7250458002090454
+    },
+    "unchecked": [
+      "Dynamic feasibility, actuator torque and balance stability",
+      "Human/IK target reachability without original target residuals",
+      "Isaac USD collision hulls; native MuJoCo collision geometry only"
+    ],
+    "note": "pass means only these offline checks passed; warning spikes can be intentional motion"
+  }
+]

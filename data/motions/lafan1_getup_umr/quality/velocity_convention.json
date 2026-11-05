@@ -1,0 +1,26 @@
+[
+  {
+    "kind": "prone_getup",
+    "mujoco_analytic_vs_reference_fd": {
+      "body_linear_max": 0.007424533367156982,
+      "body_angular_scaled_max": 0.011360108852386475
+    },
+    "isaac_analytic_vs_reference_fd": {
+      "body_linear": 0.007423698902130127,
+      "body_angular_scaled": 0.011266320943832397
+    },
+    "explanation": "Both analytic engines reproduce the finite-difference discrepancy; pose mapping passes. This is not a test of physical tracking or balance."
+  },
+  {
+    "kind": "supine_roll_getup",
+    "mujoco_analytic_vs_reference_fd": {
+      "body_linear_max": 0.009853154420852661,
+      "body_angular_scaled_max": 0.008707460016012192
+    },
+    "isaac_analytic_vs_reference_fd": {
+      "body_linear": 0.009851053357124329,
+      "body_angular_scaled": 0.008707787841558456
+    },
+    "explanation": "Both analytic engines reproduce the finite-difference discrepancy; pose mapping passes. This is not a test of physical tracking or balance."
+  }
+]

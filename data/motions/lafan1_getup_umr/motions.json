@@ -1,0 +1,12 @@
+{
+  "motions": [
+    {
+      "file": "x2_lafan_subject2_prone_getup_umr_50hz.npz",
+      "weight": 1.0
+    },
+    {
+      "file": "x2_lafan_subject2_supine_roll_getup_umr_50hz.npz",
+      "weight": 1.0
+    }
+  ]
+}

@@ -7,6 +7,30 @@
     {
       "file": "x2_getup_139_17_umr_v1_50hz.npz",
       "weight": 1.0
+    },
+    {
+      "file": "x2_lafan_subject2_prone_getup_umr_50hz.npz",
+      "weight": 1.0
+    },
+    {
+      "file": "x2_lafan_subject2_supine_roll_getup_umr_50hz.npz",
+      "weight": 1.0
+    },
+    {
+      "file": "x2_getup_139_16_umr_v1_50hz_mirror.npz",
+      "weight": 1.0
+    },
+    {
+      "file": "x2_getup_139_17_umr_v1_50hz_mirror.npz",
+      "weight": 1.0
+    },
+    {
+      "file": "x2_lafan_subject2_prone_getup_umr_50hz_mirror.npz",
+      "weight": 1.0
+    },
+    {
+      "file": "x2_lafan_subject2_supine_roll_getup_umr_50hz_mirror.npz",
+      "weight": 1.0
     }
   ]
 }

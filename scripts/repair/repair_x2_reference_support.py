@@ -27,7 +27,7 @@ from retarget.convert_x2_reference import export_mujoco_fk
 from common.x2_motion_utils import load_motion
 
 
-def solve(source, output, collision_report, starts, transition=.6, max_iterations=18, knee_floor=0., smooth_interval=None, smooth_strength=0., anchor_report=None, edit_interval=None, root_trajectory_smoothing=False):
+def solve(source, output, collision_report, starts, transition=.6, max_iterations=18, knee_floor=0., smooth_interval=None, smooth_strength=0., anchor_report=None, edit_interval=None, root_trajectory_smoothing=False,max_root_change=.20):
     source=Path(source).resolve();output=Path(output).resolve()
     if output.exists():raise FileExistsError(output)
     payload=load_motion(source);meta=payload.pop('metadata');dt=float(meta['dt_s'])
@@ -137,8 +137,8 @@ def solve(source, output, collision_report, starts, transition=.6, max_iteration
                     mujoco.mj_jac(model,data,ja,None,points[:3],int(model.geom_bodyid[a]));mujoco.mj_jac(model,data,jb,None,points[3:],int(model.geom_bodyid[b]));constraint(f,normal@(ja-jb),distance,0.)
         T=sp.coo_matrix((taskvals,(taskrows,taskcols)),shape=(len(taskrhs),size)).tocsc()
         H=Hbase+T.T@T;linear-=np.asarray(T.T@np.array(taskrhs))
-        lower=np.maximum(np.tile(np.r_[np.full(width-3,-.9),np.full(3,-.20)],(frames,1))*active[:,None],lo[None,:]-original[:,qcols]).reshape(-1)
-        upper=np.minimum(np.tile(np.r_[np.full(width-3,.9),np.full(3,.20)],(frames,1))*active[:,None],hi[None,:]-original[:,qcols]).reshape(-1)
+        lower=np.maximum(np.tile(np.r_[np.full(width-3,-.9),np.full(3,-max_root_change)],(frames,1))*active[:,None],lo[None,:]-original[:,qcols]).reshape(-1)
+        upper=np.minimum(np.tile(np.r_[np.full(width-3,.9),np.full(3,max_root_change)],(frames,1))*active[:,None],hi[None,:]-original[:,qcols]).reshape(-1)
         trust=np.tile(np.r_[np.full(width-3,.15),np.full(3,.025)],frames)
         if knee_floor>0:
             low2=lower.reshape(frames,width)
@@ -210,9 +210,10 @@ def solve(source, output, collision_report, starts, transition=.6, max_iteration
 
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--input',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--collision-report',type=Path,required=True);p.add_argument('--support-start',type=float,nargs=2,required=True,metavar=('LEFT_S','RIGHT_S'));p.add_argument('--transition',type=float,default=.6);p.add_argument('--iterations',type=int,default=18);p.add_argument('--knee-floor',type=float,default=0.);p.add_argument('--smooth-interval',nargs=2,type=float);p.add_argument('--smooth-strength',type=float,default=0.);p.add_argument('--anchor-report',type=Path);p.add_argument('--edit-interval',nargs=2,type=float);a=p.parse_args()
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--max-root-change',type=float,default=.20);p.add_argument('--input',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--collision-report',type=Path,required=True);p.add_argument('--support-start',type=float,nargs=2,required=True,metavar=('LEFT_S','RIGHT_S'));p.add_argument('--transition',type=float,default=.6);p.add_argument('--iterations',type=int,default=18);p.add_argument('--knee-floor',type=float,default=0.);p.add_argument('--smooth-interval',nargs=2,type=float);p.add_argument('--smooth-strength',type=float,default=0.);p.add_argument('--anchor-report',type=Path);p.add_argument('--edit-interval',nargs=2,type=float);a=p.parse_args()
     if not np.isfinite([*a.support_start,a.transition]).all() or min(a.support_start)<0 or a.transition<=0 or a.iterations<1:p.error('Invalid support schedule')
     if not np.isfinite([a.knee_floor,a.smooth_strength]).all() or a.knee_floor<0 or a.smooth_strength<0:p.error('Invalid knee/smoothing settings')
     if a.smooth_interval is not None and (not np.isfinite(a.smooth_interval).all() or a.smooth_interval[0]<0 or a.smooth_interval[1]<=a.smooth_interval[0]):p.error('Invalid smoothing interval')
-    solve(a.input,a.output,a.collision_report,a.support_start,a.transition,a.iterations,a.knee_floor,a.smooth_interval,a.smooth_strength,a.anchor_report,a.edit_interval)
+    if not np.isfinite(a.max_root_change) or a.max_root_change<=0:p.error('Invalid root correction bound')
+    solve(a.input,a.output,a.collision_report,a.support_start,a.transition,a.iterations,a.knee_floor,a.smooth_interval,a.smooth_strength,a.anchor_report,a.edit_interval,max_root_change=a.max_root_change)
 if __name__=='__main__':main()

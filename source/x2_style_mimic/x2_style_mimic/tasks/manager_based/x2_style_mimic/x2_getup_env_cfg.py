@@ -178,8 +178,14 @@ class GetUpEventsCfg:
             "height_offset": 0.01,
             "initial_frame_probability": 0.5,
             "transition_frame_ranges": (
-                (285, 350),  # 139_16
-                (375, 500),  # 139_17
+                (0, 543),  # x2_getup_139_16_umr_v1_50hz.npz
+                (0, 598),  # x2_getup_139_17_umr_v1_50hz.npz
+                (0, 339),  # x2_lafan_subject2_prone_getup_umr_50hz.npz
+                (0, 283),  # x2_lafan_subject2_supine_roll_getup_umr_50hz.npz
+                (0, 543),  # x2_getup_139_16_umr_v1_50hz_mirror.npz
+                (0, 598),  # x2_getup_139_17_umr_v1_50hz_mirror.npz
+                (0, 339),  # x2_lafan_subject2_prone_getup_umr_50hz_mirror.npz
+                (0, 283),  # x2_lafan_subject2_supine_roll_getup_umr_50hz_mirror.npz
             ),
         },
     )
@@ -188,7 +194,7 @@ class GetUpEventsCfg:
 class GetUpRewardsCfg:
     standing = RewTerm(
         func=getup_mdp.standing_quality_reward,
-        weight=20.0,
+        weight=10.0,
         params={
             "torso_cfg": SceneEntityCfg(
                 "robot",

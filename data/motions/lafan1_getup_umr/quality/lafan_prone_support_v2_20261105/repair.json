@@ -1,0 +1,11 @@
+{
+  "method": "mild palm-heel bias with right swing clearance and stance anchor",
+  "sources": [
+    "heel_mild.npz",
+    "right_foot_candidate.npz"
+  ],
+  "root_fixed": true,
+  "source": "logs/retarget_quality/lafan_prone_support_v2_20261105/before.npz",
+  "source_sha256": "10184826a9010883272fdc82eea1ad6e0435569555688f2c91dbdaaa7280e6f0",
+  "output": "logs/retarget_quality/lafan_prone_support_v2_20261105/final.npz"
+}

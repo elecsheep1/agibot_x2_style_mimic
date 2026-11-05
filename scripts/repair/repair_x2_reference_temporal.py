@@ -26,7 +26,18 @@ from repair.repair_x2_reference_local import export,smoothstep
 from common.x2_motion_utils import load_motion
 
 
-def repair(source,output,reference,collision_report,mode,interval,sigma,max_change=.3,side='both'):
+
+def smooth_rotation_trajectory(rotations, sigma_frames):
+    """Local quaternion smoothing without the global rotvec +/-pi branch cut."""
+    quaternions=rotations.as_quat().copy()
+    for i in range(1,len(quaternions)):
+        if quaternions[i]@quaternions[i-1]<0:quaternions[i]*=-1
+    filtered=gaussian_filter1d(quaternions,sigma_frames,axis=0,mode='nearest')
+    norm=np.linalg.norm(filtered,axis=-1,keepdims=True)
+    if np.any(norm<1e-8):raise ValueError('Rotation smoothing window contains incompatible orientations')
+    return Rotation.from_quat(filtered/norm)
+
+def repair(source,output,reference,collision_report,mode,interval,sigma,max_change=.3,side='both',local_hand_interval=None,limit_margin=0.,hand_bridge_interval=None,bridge_strength=.8,wrist_rotation_weight=100.,endpoint_position_weight=1e4,max_iterations=12):
     source=Path(source).resolve();output=Path(output).resolve()
     if output.exists():raise FileExistsError(output)
     z=load_motion(source);meta=z.pop('metadata');ref=load_motion(reference or source);dt=meta['dt_s'];time=z['time_s'];frames=len(time)
@@ -45,12 +56,30 @@ def repair(source,output,reference,collision_report,mode,interval,sigma,max_chan
     for name in body_names:
         body=int(model.body(name).id);idx=ref['body_names'].tolist().index(name);positions=ref['body_pos_w'][:,idx]
         rotations=Rotation.from_quat(ref['body_quat_xyzw'][:,idx]);base=rotations[int(round(np.mean(interval)/dt))]
-        smoothrot=Rotation.from_rotvec(gaussian_filter1d((rotations*base.inv()).as_rotvec(),sigma/dt,axis=0,mode='nearest'))*base
+        smoothrot=smooth_rotation_trajectory(rotations,sigma/dt)
         smoothpos=gaussian_filter1d(positions,sigma/dt,axis=0,mode='nearest')
         sourceidx=z['body_names'].tolist().index(name);sourceR=Rotation.from_quat(z['body_quat_xyzw'][:,sourceidx]);error=(smoothrot*sourceR.inv()).as_rotvec();targetR=Rotation.from_rotvec(error*blend[:,None])*sourceR
         targetpos=z['body_pos_w'][:,sourceidx]*(1-blend[:,None])+smoothpos*blend[:,None]
         endpoint='wrist' in name or 'ankle' in name
-        weight=np.r_[np.full(3,1e4 if endpoint else 500.),np.full(3,100. if endpoint else 10.)] if mode!='waist' else np.r_[np.zeros(3),np.full(3,3000.)]
+        weight=np.r_[np.full(3,endpoint_position_weight if endpoint else 500.),np.full(3,wrist_rotation_weight if endpoint else 10.)] if mode!='waist' else np.r_[np.zeros(3),np.full(3,3000.)]
+        if local_hand_interval is not None and name=='right_wrist_roll_link':
+            a,b=local_hand_interval
+            localblend=smoothstep((time-a)/.22)*smoothstep((b-time)/.22)
+            anchor_mask=(time>=a+.18)&(time<=a+.30)
+            if not anchor_mask.any():raise ValueError('Local anchor interval contains no frame')
+            anchor=positions[anchor_mask,:2].mean(axis=0)
+            # Only a short horizontal stabilization, not a whole-hand pose lock.
+            targetpos[:,:2]+=localblend[:,None]*(anchor-targetpos[:,:2])
+        if hand_bridge_interval is not None and name=='right_wrist_roll_link':
+            from scipy.interpolate import CubicHermiteSpline
+            a,b=hand_bridge_interval
+            indices=[int(np.argmin(abs(time-v))) for v in (a,b)]
+            velocity=np.gradient(positions,dt,axis=0)
+            bridge=CubicHermiteSpline(time[indices],positions[indices,:2],velocity[indices,:2])
+            fade=smoothstep((time-a)/.18)*smoothstep((b-time)/.18)*bridge_strength
+            # Remove the local horizontal out-and-back excursion; retain height and rotation targets.
+            bridged=bridge(np.clip(time,time[indices[0]],time[indices[1]]))
+            targetpos[:,:2]+=fade[:,None]*(bridged-targetpos[:,:2])
         tasks.append((body,targetpos,targetR,weight))
     D2=sp.diags([np.ones(frames-2),-2*np.ones(frames-2),np.ones(frames-2)],[0,1,2],shape=(frames-2,frames)).tocsc()
     D3=sp.diags([-np.ones(frames-3),3*np.ones(frames-3),-3*np.ones(frames-3),np.ones(frames-3)],[0,1,2,3],shape=(frames-3,frames)).tocsc()
@@ -73,7 +102,7 @@ def repair(source,output,reference,collision_report,mode,interval,sigma,max_chan
         for geom in geoms:
             height=lowest_point(model,data,geom,vertices)[2]-meta['ground_z']
             floor_margin[f,geom]=min(.0018,max(0.,height-1e-7))
-    for iteration in range(12):
+    for iteration in range(max_iterations):
         rr=[];cc=[];vv=[];rhs=[];tr=[];tc=[];tv=[];target=[]
         def add_constraint(f,j,distance,margin):
             j=j[dofs];nz=np.flatnonzero(abs(j)>1e-12)
@@ -97,7 +126,12 @@ def repair(source,output,reference,collision_report,mode,interval,sigma,max_chan
                 if distance<.01 and norm>1e-12:
                     normal=diff/norm*(1 if distance>=0 else -1);ja=np.zeros((3,model.nv));jb=ja.copy();mujoco.mj_jac(model,data,ja,None,points[:3],int(model.geom_bodyid[a]));mujoco.mj_jac(model,data,jb,None,points[3:],int(model.geom_bodyid[b]));add_constraint(f,normal@(ja-jb),distance,0.)
         T=sp.coo_matrix((tv,(tr,tc)),shape=(len(target),size)).tocsc();H=Hbase+T.T@T;g=gbase-np.asarray(T.T@np.array(target))
-        lower=np.maximum(lo[None,:]-original[:,qcols],-max_change*blend[:,None]).reshape(-1);upper=np.minimum(hi[None,:]-original[:,qcols],max_change*blend[:,None]).reshape(-1)
+        joint_margin=np.zeros((frames,width))
+        middle=(z['root_pos_w'][:,2]-meta.get('ground_z',0)>=.2)&(z['root_pos_w'][:,2]-meta.get('ground_z',0)<.5)
+        for c,name in enumerate(selected):
+            if 'wrist_pitch' in name or 'wrist_roll' in name:
+                joint_margin[middle,c]=np.minimum(limit_margin,np.minimum(original[middle,qcols[c]]-lo[c],hi[c]-original[middle,qcols[c]]))
+        lower=np.maximum(lo[None,:]+joint_margin-original[:,qcols],-max_change*blend[:,None]).reshape(-1);upper=np.minimum(hi[None,:]-joint_margin-original[:,qcols],max_change*blend[:,None]).reshape(-1)
         lower=np.maximum(lower,delta-.10);upper=np.minimum(upper,delta+.10)
         A=sp.coo_matrix((vv,(rr,cc)),shape=(len(rhs),size)).tocsc();A=sp.vstack([A,sp.eye(size),-sp.eye(size)],format='csc');bvec=np.r_[rhs,upper,-lower]
         A=A[:,free].tocsc();keep=np.asarray(abs(A).sum(axis=1)).reshape(-1)>1e-14
@@ -108,10 +142,18 @@ def repair(source,output,reference,collision_report,mode,interval,sigma,max_chan
         new=np.zeros(size);new[free]=solution.x;change=float(abs(new-delta).max());delta=new;q=original.copy();q[:,qcols]+=delta.reshape(frames,width);history.append({'iteration':iteration,'max_update':change});print(history[-1],flush=True)
         if iteration>2 and change<1e-5:break
     z['joint_pos'][:,selected_ids]=q[:,qcols].astype(np.float32)
-    report={'mode':'joint temporal '+mode+' chain optimization','interval_s':interval,'sigma_s':sigma,'joint_names':selected,'max_joint_change_rad':float(abs(delta).max()),'targets':'smoothed world chain poses' if mode!='waist' else 'smoothed world torso orientation','reference':str(reference or source),'iterations':history,'limitation':'kinematic/native geometry only; requires visual review and independent audit'}
+    report={'mode':'joint temporal '+mode+' chain optimization','interval_s':interval,'sigma_s':sigma,'joint_names':selected,'max_joint_change_rad':float(abs(delta).max()),'targets':'smoothed world chain poses' if mode!='waist' else 'smoothed world torso orientation','reference':str(reference or source),'local_hand_interval_s':local_hand_interval,'hand_bridge_interval_s':hand_bridge_interval,'bridge_strength':bridge_strength if hand_bridge_interval is not None else None,'preserved_limit_margin_rad':limit_margin,'endpoint_rotation_weight':wrist_rotation_weight,'endpoint_position_weight':endpoint_position_weight,'iterations':history,'limitation':'kinematic/native geometry only; requires visual review and independent audit'}
     export(source,output,z,meta,report)
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--input',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--reference',type=Path);p.add_argument('--collision-report',type=Path,required=True);p.add_argument('--mode',choices=['arms','waist','legs'],required=True);p.add_argument('--interval',type=float,nargs=2,required=True);p.add_argument('--sigma',type=float,default=.14);p.add_argument('--max-change',type=float,default=.3);a=p.parse_args()
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--endpoint-rotation-weight',type=float,default=100.);p.add_argument('--endpoint-position-weight',type=float,default=1e4);p.add_argument('--iterations',type=int,default=12);p.add_argument('--side',choices=['both','left','right'],default='both');p.add_argument('--hand-bridge',type=float,nargs=2);p.add_argument('--bridge-strength',type=float,default=.8);p.add_argument('--local-hand-interval',type=float,nargs=2);p.add_argument('--limit-margin',type=float,default=0.);p.add_argument('--input',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--reference',type=Path);p.add_argument('--collision-report',type=Path,required=True);p.add_argument('--mode',choices=['arms','waist','legs'],required=True);p.add_argument('--interval',type=float,nargs=2,required=True);p.add_argument('--sigma',type=float,default=.14);p.add_argument('--max-change',type=float,default=.3);a=p.parse_args()
     if not np.isfinite([*a.interval,a.sigma,a.max_change]).all() or a.interval[0]<0 or a.interval[1]<=a.interval[0] or a.sigma<=0 or a.max_change<=0:p.error('Invalid temporal repair settings')
-    repair(a.input,a.output,a.reference,a.collision_report,a.mode,a.interval,a.sigma,a.max_change)
+    if not np.isfinite([a.endpoint_rotation_weight,a.endpoint_position_weight]).all() or a.endpoint_rotation_weight<=0 or a.endpoint_position_weight<=0 or a.iterations<1:p.error('Invalid endpoint weights or iteration count')
+    if not np.isfinite(a.limit_margin) or a.limit_margin<0:p.error('limit margin must be finite and nonnegative')
+    if a.local_hand_interval is not None:
+        if a.mode!='arms' or not np.isfinite(a.local_hand_interval).all() or not (a.interval[0]<=a.local_hand_interval[0]<a.local_hand_interval[1]<=a.interval[1]) or a.local_hand_interval[1]-a.local_hand_interval[0]<.3:
+            p.error('local hand interval must lie inside the arms edit interval and span at least .3 s')
+    if a.hand_bridge is not None:
+        if a.local_hand_interval is not None or a.mode!='arms' or a.side=='left' or not np.isfinite([*a.hand_bridge,a.bridge_strength]).all() or not (a.interval[0]<=a.hand_bridge[0]<a.hand_bridge[1]<=a.interval[1]) or not (0<a.bridge_strength<=1):
+            p.error('Hand bridge requires a valid arms interval/strength and no local hand anchor')
+    repair(a.input,a.output,a.reference,a.collision_report,a.mode,a.interval,a.sigma,a.max_change,side=a.side,local_hand_interval=a.local_hand_interval,limit_margin=a.limit_margin,hand_bridge_interval=a.hand_bridge,bridge_strength=a.bridge_strength,wrist_rotation_weight=a.endpoint_rotation_weight,endpoint_position_weight=a.endpoint_position_weight,max_iterations=a.iterations)

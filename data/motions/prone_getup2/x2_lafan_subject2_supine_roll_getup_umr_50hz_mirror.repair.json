@@ -1,0 +1,7 @@
+{
+  "method": "XZ mirror with native-axis-derived left/right mapping",
+  "double_mirror_max_joint_error_rad": 0.0,
+  "source": "data/motions/prone_getup2/x2_lafan_subject2_supine_roll_getup_umr_50hz.npz",
+  "source_sha256": "a26f80c6418157b465a63f2831728076bd0e99b08f1e2faa1a2e6cdb96c5e9ce",
+  "output": "data/motions/prone_getup2/x2_lafan_subject2_supine_roll_getup_umr_50hz_mirror.npz"
+}

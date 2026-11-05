@@ -19,13 +19,13 @@ class PPORunnerCfg(RslRlOnPolicyRunnerCfg):
         "critic": ["policy", "privileged"],
     }
     actor = RslRlMLPModelCfg(
-        hidden_dims=[256, 256, 128],
+        hidden_dims=[512, 256, 128],
         activation="elu",
         obs_normalization=True,
-        distribution_cfg=RslRlMLPModelCfg.GaussianDistributionCfg(init_std=0.8),
+        distribution_cfg=RslRlMLPModelCfg.GaussianDistributionCfg(init_std=1.0),
     )
     critic = RslRlMLPModelCfg(
-        hidden_dims=[256, 256, 128],
+        hidden_dims=[512, 256, 128],
         activation="elu",
         obs_normalization=True,
     )

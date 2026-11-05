@@ -67,8 +67,8 @@ X2_ULTRA_CFG = ArticulationCfg(
             ],
             effort_limit_sim=120.0,
             velocity_limit_sim=11.936,
-            stiffness=100.0,
-            damping=3.0,
+            stiffness=80.0,
+            damping=4.5,
         ),
 
         # 左右踝 pitch。
@@ -80,7 +80,7 @@ X2_ULTRA_CFG = ArticulationCfg(
                 "right_ankle_pitch_joint": 13.088,
             },
             stiffness=40.0,
-            damping=2.0,
+            damping=3.0,
         ),
 
         # 左右踝 roll。
@@ -88,8 +88,8 @@ X2_ULTRA_CFG = ArticulationCfg(
             joint_names_expr=[".*_ankle_roll_joint"],
             effort_limit_sim=24.0,
             velocity_limit_sim=15.077,
-            stiffness=40.0,
-            damping=2.0,
+            stiffness=30.0,
+            damping=3.0,
         ),
 
         # 腰 pitch 和 roll。
@@ -100,8 +100,8 @@ X2_ULTRA_CFG = ArticulationCfg(
             ],
             effort_limit_sim=48.0,
             velocity_limit_sim=13.088,
-            stiffness=80.0,
-            damping=3.0,
+            stiffness=60.0,
+            damping=4.5,
         ),
 
         # 双侧肩 pitch 和 roll。
@@ -113,7 +113,7 @@ X2_ULTRA_CFG = ArticulationCfg(
             effort_limit_sim=36.0,
             velocity_limit_sim=13.088,
             stiffness=30.0,
-            damping=1.0,
+            damping=1.5,
         ),
 
         # 双侧肩 yaw、肘、腕 yaw。
@@ -126,7 +126,7 @@ X2_ULTRA_CFG = ArticulationCfg(
             effort_limit_sim=24.0,
             velocity_limit_sim=15.077,
             stiffness=20.0,
-            damping=1.0,
+            damping=1.5,
         ),
 
         # 双侧腕 pitch 和 roll。
@@ -138,7 +138,7 @@ X2_ULTRA_CFG = ArticulationCfg(
             effort_limit_sim=4.8,
             velocity_limit_sim=4.188,
             stiffness=5.0,
-            damping=0.3,
+            damping=0.45,
         ),
 
         # 头部两个关节分别使用各自的限制。
