@@ -1,0 +1,15 @@
+{
+  "device": "cuda:0",
+  "num_envs": 4,
+  "sources": 128,
+  "filters_per_source": 31,
+  "normal_ground_self_force_n": 0,
+  "collision_max_self_force_n": 125.815,
+  "environment_isolation_passed": true,
+  "training_code_modified": false,
+  "limitations": [
+    "Only one deliberately colliding pose tested",
+    "Large-scale training performance and contact-buffer capacity not tested",
+    "Legacy event callback still returned no contacts on GPU"
+  ]
+}

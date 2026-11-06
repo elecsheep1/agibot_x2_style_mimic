@@ -162,6 +162,7 @@ class X2MultiMotionGetUpEnv(X2AMPGetUpEnv):
             self._getup_assist.finish_episodes(
                 env_ids,
                 episode_stats["motion_ids"],
+                episode_stats["hold_seconds"],
             )
 
         # 父类先捕获 AMP 终止状态，再执行实际重置。

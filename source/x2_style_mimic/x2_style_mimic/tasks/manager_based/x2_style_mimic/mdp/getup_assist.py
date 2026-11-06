@@ -1,4 +1,4 @@
-"""起身辅助力：按回合采样，按时间平滑撤除。"""
+"""起身辅助力：按回合采样，按骨盆高度衰减，完全撤力后锁定。"""
 
 from collections import deque
 import torch
@@ -12,8 +12,8 @@ class GetUpAssist:
         self.levels = tuple(env.cfg.assist_force_levels)    # 读取按阶段递减的辅助力上限，单位牛顿。
         self.stage = int(env.cfg.assist_initial_stage)      # 读取初始阶段索引，必须在 [0, len(levels)) 范围内。
         self.zero_probability = float(env.cfg.assist_zero_probability)  # 读取零辅助概率，范围 [0, 1]。
-        self.full_until = float(env.cfg.assist_full_until_s)            # 读取最大辅助力保持时间，单位秒
-        self.zero_after = float(env.cfg.assist_zero_after_s)            # 读取辅助力完全撤除时间，单位秒。
+        self.full_below_height = float(env.cfg.assist_full_below_height)# 读取最大辅助力保持高度，单位米
+        self.zero_above_height = float(env.cfg.assist_zero_above_height)# 读取辅助力完全撤除高度，单位米。
 
         if (
             not self.levels
@@ -34,8 +34,8 @@ class GetUpAssist:
             raise ValueError("辅助力初始阶段无效")
         if not 0.0 <= self.zero_probability <= 1.0:
             raise ValueError("零辅助概率必须在 [0, 1]")
-        if not 0.0 <= self.full_until < self.zero_after:
-            raise ValueError("辅助力保持/撤除时间无效")
+        if not 0.0 <= self.full_below_height < self.zero_above_height < float("inf"):
+            raise ValueError("辅助力保持/撤除高度无效")
 
         body_ids, _ = self.robot.find_bodies("torso_link")      # 只允许一个躯干刚体，辅助力作用于其质心。
         if len(body_ids) != 1:
@@ -58,6 +58,16 @@ class GetUpAssist:
         self.applied_force = torch.zeros(       # 保存每个环境的当前施加辅助力，单位牛顿。
             env.num_envs, device=env.device
         )
+        self.withdrawn = torch.zeros(           # 达到撤力高度后，本回合不再恢复辅助。
+            env.num_envs,
+            dtype=torch.bool,
+            device=env.device,
+        )
+        self.withdraw_time = torch.full(        # 完全撤力开始时刻；尚未撤力时为正无穷。
+            (env.num_envs,),
+            float("inf"),
+            device=env.device,
+        )
         self.forces = torch.zeros(              # 保存每个环境的当前施加辅助力向量，单位牛顿，形状为 [num_envs, 1, 3]。
             (env.num_envs, 1, 3),
             device=env.device,
@@ -72,7 +82,17 @@ class GetUpAssist:
         self.threshold = float(                 # 读取课程成功率阈值，范围 (0, 1]，若最近若干回合的成功率超过该阈值则降低辅助力。
             env.cfg.assist_curriculum_threshold
         )
+        self.final_threshold = float(                 # 读取课程最终成功率阈值，范围 (0, 1]，若最近若干回合的成功率超过该阈值则降低辅助力。
+            env.cfg.assist_curriculum_final_threshold
+        )
+        self.required_hold = float(             # 与正式成功判定共用连续稳定时间要求。
+            env.cfg.terminations.progress.params["hold_time"]
+        )
 
+        if not 0.0 < self.final_threshold <= 1.0:
+            raise ValueError("课程末态稳定阈值必须在 (0, 1]")
+        if not 0.0 < self.required_hold < float("inf"):
+            raise ValueError("连续稳定时间必须为有限正数")
         if self.window_size <= 0:
             raise ValueError("课程统计窗口必须大于零")
         if not 0.0 < self.threshold <= 1.0:
@@ -127,29 +147,44 @@ class GetUpAssist:
                 device=self.env.device,
             ),
         )
-        self.episode_stage[ids] = self.stage
-        self.applied_force[ids] = 0.0
+        self.episode_stage[ids] = self.stage                # 记录当前阶段索引，便于课程学习统计每条动作的成功率。
+        self.applied_force[ids] = 0.0                       # 新回合开始时，当前施加的辅助力为零。
+        no_assist = self.episode_force[ids] == 0.0          # 标记本回合是否为零辅助力。
+        self.withdrawn[ids] = no_assist
+        self.withdraw_time[ids] = torch.where(
+            no_assist,
+            torch.zeros_like(self.episode_force[ids]),        # 已经撤力的回合，撤力时间为 0
+            torch.full_like(self.episode_force[ids], float("inf")),          # 尚未撤力的回合
+        )
 
         self.post_assist_succeeded[ids] = False
         self.max_post_assist_hold[ids] = 0.0
 
     @torch.no_grad()
     def apply(self):
-        """每个控制步执行一次，外力持续作用于物理子步。"""
-        # 当前回合已过去时间，单位秒
+        """控制步开始时，根据骨盆高度更新向上辅助力。"""
         elapsed = (
             self.env.episode_length_buf
             * self.env.step_dt
         )
-        # 当前回合的进度，范围 [0, 1]
+        height = self.robot.data.root_pos_w.torch[:, 2] - self.env.scene.env_origins[:, 2]
+        # 第一次达到撤力高度时，记录时刻并锁定
+        newly_withdrawn = ~self.withdrawn & (height >= self.zero_above_height)
+        self.withdraw_time[newly_withdrawn] = elapsed[newly_withdrawn]
+        self.withdrawn |= newly_withdrawn
+        # 计算当前骨盆高度对应的辅助力衰减比例，范围 [0, 1]，在 full_below_height 以下为 1，在 zero_above_height 以上为 0。
         progress = (
-            (elapsed - self.full_until) / (self.zero_after - self.full_until)
+            (height - self.full_below_height) / (self.zero_above_height - self.full_below_height)
         ).clamp(0.0, 1.0)
-
         # 从 1 平滑下降到 0。
         fade = 1.0 - progress.square() * (3.0 - 2.0 * progress)
-
-        self.applied_force.copy_(self.episode_force * fade)         # 计算当前施加的辅助力，单位牛顿。
+        self.applied_force.copy_(
+            torch.where(
+                self.withdrawn,
+                torch.zeros_like(self.applied_force),
+                self.episode_force * fade,
+            )
+        )
         self.forces.zero_()                                         # 先把所有环境的力清零。
         self.forces[:, 0, 2] = self.applied_force                   # 施加的辅助力方向为全局 Z 轴向上，单位牛顿。
 
@@ -173,18 +208,12 @@ class GetUpAssist:
         """
         elapsed = (self.env.episode_length_buf * self.env.step_dt)
 
-        # 确定无辅助阶段的开始时间
-        # 零辅助回合从 t=0 开始；
-        # 有辅助回合从撤力完成时开始。
-        zero_started = torch.where(
-            self.episode_force > 0,
-            torch.full_like(elapsed, self.zero_after),
+        # 仅从实际完全撤力的时刻开始计时。
+        zero_duration = torch.where(
+            self.withdrawn,
+            (elapsed - self.withdraw_time).clamp_min(0.0),
             torch.zeros_like(elapsed),
         )
-        # 计算每个环境的无辅助阶段已经持续了多久，单位秒
-        zero_duration = (
-            elapsed - zero_started
-        ).clamp_min(0.0)
 
         # 连续稳定可能早于撤力开始，只截取无辅助部分。
         post_hold = torch.minimum(
@@ -203,17 +232,10 @@ class GetUpAssist:
             post_hold + 1e-6 >= required_hold
         )
 
-    def finish_episodes(self, env_ids, motion_ids):
-        """
-        收集这些 episode 是否成功；
-        按动作类别分别统计成功率；
-        如果所有动作都达标，就降低辅助力阶段。
-        """
+    def finish_episodes(self, env_ids, motion_ids, final_hold):
+        """仅用首帧出生、整回合零辅助的表现推动课程降档。"""
         # 只在课程学习启用且当前阶段不是最后阶段时才统计。
-        if (
-            not self.curriculum_enabled
-            or self.stage >= len(self.levels) - 1
-        ):
+        if (not self.curriculum_enabled or self.stage >= len(self.levels) - 1):
             return
 
         ids = torch.as_tensor(
@@ -221,13 +243,13 @@ class GetUpAssist:
             dtype=torch.long,
             device=self.env.device,
         )
-
-        # 排除零辅助回合和仍使用旧阶段力的回合。
+        frame_ids = self.env._getup_reference_frame_ids[ids]        # 取出每个环境的出生帧编号，便于判断是否为首帧出生。
+        # 只统计当前阶段、首帧出生、整回合零辅助的回合。
         eligible = (
             (self.episode_stage[ids] == self.stage)
-            & (self.episode_force[ids] > 0)
+            & (self.episode_force[ids] == 0)
+            & (frame_ids == 0)
         )
-
         # 取出有效 episode 对应的动作编号
         selected_motion_ids = motion_ids[eligible].tolist()
         # 取出这些 episode 是否在无辅助期间成功保持稳定。
@@ -235,17 +257,22 @@ class GetUpAssist:
             self.post_assist_succeeded[ids][eligible]
             .tolist()
         )
-
+        # 取出这些 episode 在最终阶段是否成功保持稳定。
+        selected_final_successes = (
+            final_hold[eligible] + 1e-6 >= self.required_hold
+        ).tolist()
         # 统计每条动作的成功率，若所有动作都达标就降低辅助力阶段。
-        for motion_id, succeeded in zip(
-            selected_motion_ids, selected_successes
+        for motion_id, succeeded, final_succeeded in zip(
+            selected_motion_ids, selected_successes, selected_final_successes
         ):
             # 把结果放入对应动作的队列。
-            self.results[motion_id].append(bool(succeeded))
-
+            self.results[motion_id].append(
+                (bool(succeeded), bool(final_succeeded))
+            )
         ready = all(
-            len(values) == self.window_size
-            and sum(values) / len(values) >= self.threshold
+            len(values) == self.window_size                                         # 队列已满，才有资格推动课程进度
+            and sum(row[0] for row in values) / len(values) >= self.threshold       # 队列中“完全无辅助力期间成功保持稳定”的比例达标
+            and sum(row[1] for row in values) / len(values) >= self.final_threshold # 队列中“最终阶段成功保持稳定”的比例达标
             for values in self.results.values()
         )
         if not ready:
@@ -270,17 +297,20 @@ class GetUpAssist:
         return {
             "levels": self.levels,
             "zero_probability": self.zero_probability,
-            "full_until": self.full_until,
-            "zero_after": self.zero_after,
+            "full_height": self.full_below_height,
+            "zero_height": self.zero_above_height,
             "window_size": self.window_size,
             "threshold": self.threshold,
+            "final_threshold": self.final_threshold,
+            "required_hold": self.required_hold,
+            "evaluation": "initial_frame_zero_assist",
             "active_motion_ids": self.active_motion_ids,
         }
 
     def state_dict(self):
         """只保存课程进度，不保存物理状态或当前回合历史。"""
         return {
-            "version": 1,
+            "version": 2,
             "settings": self._curriculum_settings(),
             "stage": self.stage,
             "results": {
@@ -290,7 +320,7 @@ class GetUpAssist:
         }
 
     def load_state_dict(self, state):
-        if state.get("version") != 1:
+        if state.get("version") != 2:
             raise ValueError("辅助力课程存档版本不匹配")
 
         if state["settings"] != self._curriculum_settings():
@@ -308,11 +338,16 @@ class GetUpAssist:
             raise ValueError("课程统计中的动作编号不一致")
 
         for values in saved_results.values():
-            if (
-                len(values) > self.window_size
-                or any(type(value) is not bool for value in values)
-            ):
-                raise ValueError("课程统计窗口数据无效")
+            if len(values) > self.window_size:
+                raise ValueError("课程统计窗口长度无效")
+
+            for row in values:
+                if (
+                    not isinstance(row, (tuple, list))
+                    or len(row) != 2
+                    or any(type(value) is not bool for value in row)
+                ):
+                    raise ValueError("课程统计窗口数据无效")
 
         self.stage = stage
         for motion_id, values in saved_results.items():

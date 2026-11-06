@@ -179,8 +179,9 @@ class TransitionDiagnostics(MultiMotionDiagnostics):
                                   leg_target_hold_after_s=getattr(getattr(self.env, '_diagnostic_leg_target_hold', None), 'after_seconds', None),
                                   birth_frames=self.birth_frames.tolist(),
                                   birth_mode='fixed_reference_frame_control' if bool((self.birth_frames != 0).any()) else 'frame_zero_evaluation',
-                                  full_until_s=self.env.cfg.assist_full_until_s,
-                                  zero_after_s=self.env.cfg.assist_zero_after_s,
+                                  full_below_height=self.env.cfg.assist_full_below_height,
+                                  zero_above_height=self.env.cfg.assist_zero_above_height,
+                                  withdrawal_mode='height_smoothstep_latched',
                                   initial_motion_ids='cyclic enabled motion assignment; see rows')
         self.output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
         if not self.complete or self.trace_printed:

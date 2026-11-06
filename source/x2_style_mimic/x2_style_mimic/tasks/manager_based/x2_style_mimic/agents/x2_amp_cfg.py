@@ -40,8 +40,8 @@ class MultiMotionAMPAlgorithmCfg(RslRlPpoAlgorithmCfg):
         "normalization_clip": 10.0,
 
         "buffer_capacity": 100_000,
-        "updates_per_iteration": 4,
-        "batch_size": 256,
+        "updates_per_iteration": 20,
+        "batch_size": 4096,
     }
 
 

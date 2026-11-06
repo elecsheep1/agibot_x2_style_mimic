@@ -202,6 +202,45 @@ def body_observation(env, asset_cfg, wrist_only=False):
         dim=-1,
     )
 
+def critic_body_geometry(env, asset_cfg):
+    """Critic 使用的骨盆相对位置与姿态，不包含身体速度。"""
+    robot = env.scene[asset_cfg.name]
+
+    root_pose = robot.data.root_link_pose_w.torch
+    body_pose = robot.data.body_link_pose_w.torch[:, asset_cfg.body_ids]
+    root_q = normalize_quaternion(root_pose[:, 3:7])
+    body_q = normalize_quaternion(body_pose[..., 3:7])
+    position = inverse_rotate(
+        root_q[:, None, :],
+        body_pose[..., :3] - root_pose[:, None, :3],
+    )
+    relative_q = quaternion_multiply(
+        quaternion_conjugate(root_q)[:, None, :],
+        body_q,
+    )
+    axes = torch.eye(
+        3,
+        device=body_pose.device,
+        dtype=body_pose.dtype,
+    )[:2]
+    rotation_6d = inverse_rotate(
+        quaternion_conjugate(relative_q)[..., None, :],  # [N, B, 1, 4]
+        axes[None, None, :, :],  # [1, 1, 2, 3]
+    ).flatten(start_dim=-2)  # [N, B, 6]
+
+    return torch.cat(
+        (
+            position.flatten(start_dim=1),
+            rotation_6d.flatten(start_dim=1),
+        ),
+        dim=-1,
+    )
+
+def critic_root_height(env):
+    """根刚体原点相对于环境地面的高度。"""
+    robot = env.scene["robot"]
+    return robot.data.root_link_pose_w.torch[:, 2:3] - env.scene.env_origins[:, 2:3]
+
 def reference_body_velocity(position, quaternion, dt):
     """由相邻参考帧估算刚体原点世界线速度和世界角速度。"""
     if len(position) < 2:
@@ -236,7 +275,7 @@ def reference_body_velocity(position, quaternion, dt):
     )
 
     duration = torch.full(
-        (len(q), 1, 1),
+        (len(q),) + (1,) * (q.ndim - 1),
         2.0 * dt,
         device=q.device,
         dtype=q.dtype,

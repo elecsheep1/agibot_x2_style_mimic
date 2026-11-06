@@ -17,7 +17,8 @@ from .mdp import getup as getup_mdp
 from .mdp.amp import (
     AMP_KEY_BODY_NAMES,
     amp_observation,
-    body_observation,
+    critic_body_geometry,
+    critic_root_height,
 )
 from .mdp.actions_cfg import LimitedJointPositionActionCfg
 from .mdp.getup_progress import GetUpProgress
@@ -81,45 +82,11 @@ class GetUpSceneCfg(X2StyleMimicSceneCfg):
         _ROBOT_PATH + "/.*right_wrist_roll_link"
     )
 
-def _relative_body_terms():
-    support = ObsTerm(
-        func=body_observation,
-        params={
-            "asset_cfg": SceneEntityCfg(
-                "robot",
-                body_names=[
-                    "torso_link",
-                    "left_ankle_roll_link",
-                    "right_ankle_roll_link",
-                ],
-                preserve_order=True,
-            ),
-        },
-    )
-
-    hands = ObsTerm(
-        func=body_observation,
-        params={
-            "asset_cfg": SceneEntityCfg(
-                "robot",
-                body_names=[
-                    "left_wrist_roll_link",
-                    "right_wrist_roll_link",
-                ],
-                preserve_order=True,
-            ),
-            "wrist_only": True,
-        },
-    )
-
-    return support, hands
-
 @configclass
 class GetUpObservationsCfg(ObservationsCfg):
 
     @configclass
     class PolicyCfg(ObservationsCfg.PolicyCfg):
-        relative_support, relative_hands = _relative_body_terms()
 
         def __post_init__(self):
             super().__post_init__()
@@ -131,7 +98,21 @@ class GetUpObservationsCfg(ObservationsCfg):
 
     @configclass
     class PrivilegedCfg(ObservationsCfg.PrivilegedCfg):
-        relative_support, relative_hands = _relative_body_terms()
+
+        root_height = ObsTerm(
+            func=critic_root_height,
+        )
+
+        body_geometry = ObsTerm(
+            func=critic_body_geometry,
+            params={
+                "asset_cfg": SceneEntityCfg(
+                    "robot",
+                    body_names=list(AMP_KEY_BODY_NAMES),
+                    preserve_order=True,
+                ),
+            },
+        )
 
         def __post_init__(self):
             super().__post_init__()
@@ -241,6 +222,18 @@ class GetUpRewardsCfg:
         },
     )
 
+    joint_acc = RewTerm(
+        func=mdp.joint_acc_l2,
+        weight=-1.0e-7,
+        params={
+            "asset_cfg": SceneEntityCfg(
+                "robot",
+                joint_names=POLICY_JOINT_NAMES,
+                preserve_order=True,
+            ),
+        },
+    )
+
     out_of_bounds_failure = RewTerm(
         func=getup_mdp.out_of_bounds_failure,
         weight=-5.0,
@@ -316,14 +309,15 @@ class X2MultiMotionGetUpEnvCfg(X2StyleMimicEnvCfg):
     actions: GetUpActionsCfg = GetUpActionsCfg()
 
     # 保留现有环境所需字段，默认使用零辅助力。
-    assist_force_levels: tuple = (200.0, 150.0, 100.0, 50.0, 0.0)
+    assist_force_levels: tuple = (100.0, 75.0, 50.0, 25.0, 0.0)
     assist_initial_stage: int = 0
-    assist_zero_probability: float = 1.0
-    assist_full_until_s: float = 2.0
-    assist_zero_after_s: float = 5.0
-    assist_curriculum_enabled: bool = False
+    assist_zero_probability: float = 0.30
+    assist_full_below_height: float = 0.20
+    assist_zero_above_height: float = 0.50
+    assist_curriculum_enabled: bool = True
     assist_curriculum_window: int = 64
     assist_curriculum_threshold: float = 0.80
+    assist_curriculum_final_threshold: float = 0.70
 
     # AMP 奖励按连续稳定时长平滑退出。
     amp_gate_fade_start_s: float = 0.10
