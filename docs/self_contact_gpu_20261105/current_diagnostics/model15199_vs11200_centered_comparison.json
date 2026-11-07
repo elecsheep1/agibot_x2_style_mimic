@@ -1,0 +1,97 @@
+{
+  "conditions": {
+    "center_xy": true,
+    "num_envs": 64,
+    "seed": 42,
+    "zero_assist": true,
+    "states": 421
+  },
+  "by_model": {
+    "11200": {
+      "overall": {
+        "count": 421,
+        "success_rate": 0.8978622327790974,
+        "stable_at_end_rate": 0.8978622327790974
+      },
+      "by_source": {
+        "near_reference": {
+          "count": 217,
+          "success_rate": 0.8341013824884793,
+          "stable_at_end_rate": 0.8341013824884793
+        },
+        "simulated_fall": {
+          "count": 204,
+          "success_rate": 0.9656862745098039,
+          "stable_at_end_rate": 0.9656862745098039
+        }
+      }
+    },
+    "15199": {
+      "overall": {
+        "count": 421,
+        "success_rate": 0.997624703087886,
+        "stable_at_end_rate": 0.997624703087886
+      },
+      "by_source": {
+        "near_reference": {
+          "count": 217,
+          "success_rate": 1.0,
+          "stable_at_end_rate": 1.0
+        },
+        "simulated_fall": {
+          "count": 204,
+          "success_rate": 0.9950980392156863,
+          "stable_at_end_rate": 0.9950980392156863
+        }
+      }
+    }
+  },
+  "fixed_rows": [
+    61,
+    97,
+    101,
+    165,
+    173,
+    181,
+    197,
+    225,
+    245,
+    249,
+    273,
+    303,
+    307,
+    311,
+    327,
+    331,
+    339,
+    346,
+    358,
+    382,
+    390,
+    434,
+    620,
+    644,
+    728,
+    779,
+    807,
+    827,
+    843,
+    871,
+    927,
+    1036,
+    931,
+    943,
+    951,
+    967,
+    1016,
+    1114,
+    1140,
+    1327,
+    1634,
+    1996
+  ],
+  "regressed_rows": [],
+  "both_failed_rows": [
+    1348
+  ]
+}

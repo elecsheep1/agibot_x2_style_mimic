@@ -1,0 +1,163 @@
+{
+  "603": {
+    "episode": {
+      "terminated": false,
+      "timed_out": true,
+      "bank_row": 603,
+      "source_type": 1,
+      "motion_id": -1,
+      "family_id": 710,
+      "succeeded": false,
+      "stable_at_end": false,
+      "max_hold_seconds": 0.0,
+      "final_hold_seconds": 0.0,
+      "first_success_seconds": -1.0
+    },
+    "max_height_m": 0.15923349559307098,
+    "late_height_range_m": [
+      0.13791951537132263,
+      0.13808146119117737
+    ],
+    "late_contact_pairs": {
+      "left_knee_link / right_ankle_roll_link": {
+        "min_n": 152.56846618652344,
+        "max_n": 157.1904754638672,
+        "mean_n": 154.69633941650392
+      }
+    },
+    "final_top_target_errors": [
+      {
+        "joint": "left_hip_pitch_joint",
+        "actual": -0.2757762670516968,
+        "requested": 0.7359699010848999,
+        "target": 0.7359699010848999,
+        "estimated_pd_nm": 80.93186950683594,
+        "limit_nm": 120.0
+      },
+      {
+        "joint": "right_hip_pitch_joint",
+        "actual": -0.36911436915397644,
+        "requested": -1.0315278768539429,
+        "target": -1.0315278768539429,
+        "estimated_pd_nm": -52.983333587646484,
+        "limit_nm": 120.0
+      },
+      {
+        "joint": "left_hip_yaw_joint",
+        "actual": 0.709067165851593,
+        "requested": 0.11557338386774063,
+        "target": 0.11557338386774063,
+        "estimated_pd_nm": -47.4959716796875,
+        "limit_nm": 120.0
+      },
+      {
+        "joint": "right_hip_roll_joint",
+        "actual": 0.14011406898498535,
+        "requested": -0.3159235715866089,
+        "target": -0.3159235715866089,
+        "estimated_pd_nm": -36.486141204833984,
+        "limit_nm": 120.0
+      },
+      {
+        "joint": "waist_roll_joint",
+        "actual": 0.2536983788013458,
+        "requested": 0.8987141847610474,
+        "target": 0.4880000054836273,
+        "estimated_pd_nm": 14.054583549499512,
+        "limit_nm": 48.0
+      },
+      {
+        "joint": "left_hip_roll_joint",
+        "actual": 0.3384404182434082,
+        "requested": 0.5642838478088379,
+        "target": 0.5642838478088379,
+        "estimated_pd_nm": 18.062227249145508,
+        "limit_nm": 120.0
+      }
+    ],
+    "torque_caveat": "PD estimate only, not actual drive measurement; self contacts subject to asset collision filters"
+  },
+  "1348": {
+    "episode": {
+      "terminated": false,
+      "timed_out": true,
+      "bank_row": 1348,
+      "source_type": 1,
+      "motion_id": -1,
+      "family_id": 1429,
+      "succeeded": false,
+      "stable_at_end": false,
+      "max_hold_seconds": 0.0,
+      "final_hold_seconds": 0.0,
+      "first_success_seconds": -1.0
+    },
+    "max_height_m": 0.14254975318908691,
+    "late_height_range_m": [
+      0.1311214417219162,
+      0.13338129222393036
+    ],
+    "late_contact_pairs": {
+      "left_knee_link / left_shoulder_yaw_link": {
+        "min_n": 325.8697814941406,
+        "max_n": 340.84661865234375,
+        "mean_n": 331.8442810058594
+      },
+      "head_pitch_link / left_ankle_roll_link": {
+        "min_n": 1.1027286052703857,
+        "max_n": 5.888599395751953,
+        "mean_n": 3.1944612860679626
+      }
+    },
+    "final_top_target_errors": [
+      {
+        "joint": "waist_yaw_joint",
+        "actual": 1.0053126811981201,
+        "requested": -0.20881584286689758,
+        "target": -0.20881584286689758,
+        "estimated_pd_nm": -97.1404037475586,
+        "limit_nm": 120.0
+      },
+      {
+        "joint": "waist_roll_joint",
+        "actual": -0.488015353679657,
+        "requested": 1.7438993453979492,
+        "target": 0.4880000054836273,
+        "estimated_pd_nm": 58.565242767333984,
+        "limit_nm": 48.0
+      },
+      {
+        "joint": "left_shoulder_roll_joint",
+        "actual": 0.7912774682044983,
+        "requested": -1.0635666847229004,
+        "target": -0.061000000685453415,
+        "estimated_pd_nm": -25.56291389465332,
+        "limit_nm": 36.0
+      },
+      {
+        "joint": "left_hip_pitch_joint",
+        "actual": 2.251676321029663,
+        "requested": 1.402467131614685,
+        "target": 1.402467131614685,
+        "estimated_pd_nm": -67.90234375,
+        "limit_nm": 120.0
+      },
+      {
+        "joint": "left_hip_roll_joint",
+        "actual": 0.6007462739944458,
+        "requested": 0.03658793494105339,
+        "target": 0.03658793494105339,
+        "estimated_pd_nm": -45.134552001953125,
+        "limit_nm": 120.0
+      },
+      {
+        "joint": "left_shoulder_pitch_joint",
+        "actual": -0.5189051032066345,
+        "requested": -1.0282800197601318,
+        "target": -1.0282800197601318,
+        "estimated_pd_nm": -15.282167434692383,
+        "limit_nm": 36.0
+      }
+    ],
+    "torque_caveat": "PD estimate only, not actual drive measurement; self contacts subject to asset collision filters"
+  }
+}

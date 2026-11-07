@@ -1,0 +1,58 @@
+{
+  "model15199_fallen_v2_additions_holdout.json": {
+    "overall": {
+      "count": 302,
+      "success_rate": 0.9867549668874173,
+      "stable_at_end_rate": 0.9867549668874173
+    },
+    "failed": [
+      512,
+      603,
+      1074,
+      1479
+    ],
+    "changed_rows_vs_original": []
+  },
+  "model15199_v2_holdout_repeat1.json": {
+    "overall": {
+      "count": 302,
+      "success_rate": 0.9867549668874173,
+      "stable_at_end_rate": 0.9867549668874173
+    },
+    "failed": [
+      512,
+      603,
+      1074,
+      1479
+    ],
+    "changed_rows_vs_original": []
+  },
+  "model15199_v2_holdout_repeat2.json": {
+    "overall": {
+      "count": 302,
+      "success_rate": 0.9867549668874173,
+      "stable_at_end_rate": 0.9867549668874173
+    },
+    "failed": [
+      512,
+      603,
+      1074,
+      1479
+    ],
+    "changed_rows_vs_original": []
+  },
+  "model15199_v2_row603_detailed64.json": {
+    "overall": {
+      "count": 302,
+      "success_rate": 0.9867549668874173,
+      "stable_at_end_rate": 0.9867549668874173
+    },
+    "failed": [
+      512,
+      603,
+      1074,
+      1479
+    ],
+    "changed_rows_vs_original": []
+  }
+}

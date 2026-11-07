@@ -164,7 +164,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             reset_params["manifest_file"] = manifest_path
             agent_cfg.algorithm.amp_cfg["manifest_file"] = manifest_path
             print(f"[验收参考] {manifest_path}", flush=True)
-        reset_params.update(transition_frame_ranges=None, start_phase=0.0, end_phase=0.0)
+        reset_params.update(
+            transition_frame_ranges=None,
+            start_phase=0.0,
+            end_phase=0.0,
+            perturb_initial_probability=0.0,
+            perturb_state_bank=None,
+        )
         print("[验收出生] 所有动作从第0帧开始，训练混合出生已关闭。", flush=True)
 
         # create isaac environment

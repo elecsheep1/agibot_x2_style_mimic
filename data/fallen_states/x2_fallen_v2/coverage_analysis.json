@@ -1,0 +1,35 @@
+{
+  "x2_fallen_v1": {
+    "count": 2048,
+    "side_fall": 63,
+    "side_train": 52,
+    "side_holdout": 11,
+    "gravity_dominant_axes": [
+      961,
+      63,
+      0
+    ]
+  },
+  "x2_fallen_v2_additions": {
+    "count": 1536,
+    "side_fall": 158,
+    "side_train": 135,
+    "side_holdout": 23,
+    "gravity_dominant_axes": [
+      865,
+      158,
+      1
+    ]
+  },
+  "x2_fallen_v2": {
+    "count": 3584,
+    "side_fall": 221,
+    "side_train": 187,
+    "side_holdout": 34,
+    "gravity_dominant_axes": [
+      1826,
+      221,
+      1
+    ]
+  }
+}

@@ -9,6 +9,8 @@ import torch
 from isaaclab.managers import ManagerTermBase, SceneEntityCfg
 
 from .motion_dataset import MotionDataset
+from .getup_births import FallenStateBank
+from x2_style_mimic.assets.x2_ultra_cfg import X2_ULTRA_USD
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -109,8 +111,8 @@ def _write_reference_state(
 def reset_from_motion_dataset(
     env,
     env_ids,
-    manifest_file,
-    policy_joint_names,
+    manifest_file,                          # 动作数据集清单文件路径
+    policy_joint_names,                     # 策略控制的关节名称列表
     start_phase=0.0,
     end_phase=0.0,
     use_reference_velocity=False,           # 是否使用参考速度
@@ -119,10 +121,16 @@ def reset_from_motion_dataset(
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     initial_frame_probability=0.5,
     transition_frame_ranges=None,
+    perturb_initial_probability=0.0,        # 初始状态扰动概率
+    perturb_state_bank=None,                # 初始状态扰动库
 ):
     """按权重选择动作；默认从首帧、零速度出生。"""
     if not math.isfinite(height_offset) or height_offset < 0.0:
         raise ValueError("height_offset 必须为非负有限数")
+    if not (math.isfinite(perturb_initial_probability) and 0.0 <= perturb_initial_probability <= 1.0):
+        raise ValueError("perturb_initial_probability 必须是 [0, 1] 内的有限数")
+    if perturb_initial_probability > 0.0 and perturb_state_bank is None:
+        raise ValueError("启用扰动出生前必须提供已验证的扰动状态库")
 
     robot = env.scene[asset_cfg.name]
 
@@ -168,23 +176,91 @@ def reset_from_motion_dataset(
         initial_frame_probability=initial_frame_probability,
         transition_frame_ranges=transition_frame_ranges,
     )
+    initial = state["initial_branch"]
+    perturbed = torch.zeros_like(initial)
+    if perturb_initial_probability > 0.0:
+        perturbed = initial & (
+            torch.rand(len(env_ids), device=env.device)
+            < perturb_initial_probability
+        )
+    # 0：原始首帧。
+    # 1：扰动首帧。
+    # 2：参考过渡帧。
+    birth_types = torch.full(
+        (len(env_ids),),
+        2,
+        dtype=torch.long,
+        device=env.device,
+    )
+    birth_types[initial] = 0
+    birth_types[perturbed] = 1
 
     root_pose = state["root_pose"].clone()
-    root_pose[:, :3] += env.scene.env_origins[env_ids]
-    root_pose[:, 2] += height_offset
-
     root_velocity = state["root_velocity"].clone()
     joint_pos = state["joint_pos"].clone()
     joint_vel = state["joint_vel"].clone()
 
+    motion_ids = state["motion_ids"].clone()
+    frame_ids = state["frame_ids"].clone()
+    bank_row_ids = torch.full_like(motion_ids, -1)
+
+    # 先处理参考状态速度。
     if not use_reference_velocity:
         root_velocity.zero_()
         joint_vel.zero_()
     elif zero_initial_frame_velocity:
-        # 混合出生：首帧清零，其他参考帧保留参考速度。
-        initial_mask = state["frame_ids"] == 0
+        initial_mask = frame_ids == 0
         root_velocity[initial_mask] = 0.0
         joint_vel[initial_mask] = 0.0
+
+    if bool(perturbed.any()):
+        # 加载、抽样并替换已验证的扰动状态。
+        bank_key = (
+            str(Path(perturb_state_bank).resolve()),
+            tuple(robot.joint_names),
+            tuple(str(path) for path in dataset.paths),
+            str(env.device),
+        )
+        cache = getattr(env, "_getup_fallen_bank_cache", None)
+        if cache is None or cache[0] != bank_key:
+            bank = FallenStateBank(
+                path=perturb_state_bank,
+                robot_joint_names=robot.joint_names,
+                device=env.device,
+                motion_paths=dataset.paths,
+                asset_root=X2_ULTRA_USD.parent,
+            )
+            env._getup_fallen_bank_cache = (bank_key, bank)
+        else:
+            bank = cache[1]
+
+        # 库分支内部：近邻和仿真摔倒各 50%。
+        source_types = torch.randint(
+            0, 2,
+            (int(perturbed.sum().item()),),
+            device=env.device,
+        )
+        sampled = bank.sample(
+            motion_ids[perturbed], source_types
+        )
+
+        root_pose[perturbed] = sampled["root_pose"]
+        root_velocity[perturbed] = sampled["root_velocity"]
+        joint_pos[perturbed] = sampled["joint_pos"]
+        joint_vel[perturbed] = sampled["joint_vel"]
+        # 采集时的水平位移不作为出生位置。
+        # 保留根高度、朝向、关节姿态和全部速度。
+        root_pose[perturbed, :2] = 0.0
+        birth_types[perturbed] = torch.where(
+            source_types == 0, 1, 3
+        )
+        motion_ids[perturbed] = sampled["motion_id"]
+        frame_ids[perturbed] = -1
+        bank_row_ids[perturbed] = sampled["bank_row"]
+
+    # 库中姿态已经落定，不再次加高。
+    root_pose[~perturbed, 2] += height_offset
+    root_pose[:, :3] += env.scene.env_origins[env_ids]
 
     # 与当前仿真模型的硬限位对齐，并记录裁剪数量。
     limits = robot.data.joint_pos_limits.torch[env_ids]
@@ -192,9 +268,18 @@ def reset_from_motion_dataset(
         min=limits[:, :, 0],
         max=limits[:, :, 1],
     )
+    clamp_error = (clamped - joint_pos).abs().amax(dim=-1)
+    # 允许小幅求解器限位偏差，明显越界仍拒绝。
+    bank_limit_tolerance = 0.003
+    if bool((perturbed & (clamp_error > bank_limit_tolerance)).any()):
+        raise ValueError("状态库关节位置明显超限")
     # 计算每个环境中被裁剪的关节数量，判断裁剪前后关节位置的绝对差值是否大于 1e-6，然后对每个环境求和得到裁剪数量。
     clamp_count = ((clamped - joint_pos).abs() > 1e-6).sum(dim=-1)
-    joint_pos = clamped
+    joint_pos = torch.where(
+        perturbed[:, None],
+        joint_pos,
+        clamped,
+    )
 
     velocity_limits = robot.data.joint_vel_limits.torch[env_ids]
     joint_vel = joint_vel.clamp(
@@ -207,6 +292,8 @@ def reset_from_motion_dataset(
         "_getup_reference_frame_ids",
         "_getup_reference_motion_ids",
         "_getup_reference_joint_clamp_counts",
+        "_getup_birth_types",
+        "_getup_bank_row_ids",
     ):
         if not hasattr(env, name):
             setattr(
@@ -220,12 +307,12 @@ def reset_from_motion_dataset(
             )
 
     # 保存每个环境的出生动作、帧号和裁剪数量。
-    env._getup_reference_frame_ids[env_ids] = state["frame_ids"]
-    env._getup_reference_motion_ids[env_ids] = state["motion_ids"]
+    env._getup_reference_frame_ids[env_ids] = frame_ids
+    env._getup_reference_motion_ids[env_ids] = motion_ids
     env._getup_reference_joint_clamp_counts[env_ids] = clamp_count
-    env._getup_reference_motion_paths = [
-        str(path) for path in dataset.paths
-    ]
+    env._getup_reference_motion_paths = [str(path) for path in dataset.paths]
+    env._getup_birth_types[env_ids] = birth_types
+    env._getup_bank_row_ids[env_ids] = bank_row_ids
 
     _write_reference_state(
         env,

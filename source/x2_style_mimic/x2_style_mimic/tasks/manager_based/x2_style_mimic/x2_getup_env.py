@@ -94,6 +94,8 @@ class X2MultiMotionGetUpEnv(X2AMPGetUpEnv):
         motion_ids = (
             self._getup_reference_motion_ids.clone()
         )
+        birth_types = self._getup_birth_types.clone()
+        bank_row_ids = self._getup_bank_row_ids.clone()
 
         self._getup_assist.apply()
         result = super().step(action)
@@ -106,6 +108,8 @@ class X2MultiMotionGetUpEnv(X2AMPGetUpEnv):
             for key, value in snapshot.items()
         }
         extras["getup_progress"]["motion_ids"] = motion_ids
+        extras["getup_progress"]["birth_types"] = birth_types
+        extras["getup_progress"]["bank_row_ids"] = bank_row_ids
 
         # 使用终止判断阶段保存的真实步后快照。
         # 即使本步自动重置，也不会读到下一回合的稳定时长。
@@ -156,6 +160,12 @@ class X2MultiMotionGetUpEnv(X2AMPGetUpEnv):
                 self._getup_reference_motion_ids[
                     env_ids
                 ].clone()
+            )
+            episode_stats["birth_types"] = (
+                self._getup_birth_types[env_ids].clone()
+            )
+            episode_stats["bank_row_ids"] = (
+                self._getup_bank_row_ids[env_ids].clone()
             )
 
         if episode_stats is not None:
@@ -224,6 +234,37 @@ class X2MultiMotionGetUpEnv(X2AMPGetUpEnv):
         log["GetUp/final_hold_seconds"] = (
             final_hold.mean().item()
         )
+
+        required_hold = float(self.cfg.terminations.progress.params["hold_time"])
+        birth_names = (
+            "reference_initial",
+            "perturbed_initial",
+            "reference_rsi",
+            "simulated_fall",
+        )
+        for birth_id, birth_name in enumerate(birth_names):
+            selected = episode_stats["birth_types"] == birth_id
+            if not bool(selected.any()):
+                continue
+            prefix = f"GetUp/{birth_name}"
+            log[f"{prefix}/success_rate"] = (
+                succeeded[selected].float().mean().item()
+            )
+
+            log[f"{prefix}/stable_at_end_rate"] = (
+                (final_hold[selected] + 1e-6 >= required_hold)
+                .float()
+                .mean()
+                .item()
+            )
+
+            log[f"{prefix}/max_hold_seconds"] = (
+                max_hold[selected].mean().item()
+            )
+
+            log[f"{prefix}/final_hold_seconds"] = (
+                final_hold[selected].mean().item()
+            )
 
         # 只对成功回合计算首次成功时间。
         # 本批没有成功回合时不写该指标。

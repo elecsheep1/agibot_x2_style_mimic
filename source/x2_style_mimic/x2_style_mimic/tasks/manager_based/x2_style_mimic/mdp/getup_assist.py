@@ -243,12 +243,11 @@ class GetUpAssist:
             dtype=torch.long,
             device=self.env.device,
         )
-        frame_ids = self.env._getup_reference_frame_ids[ids]        # 取出每个环境的出生帧编号，便于判断是否为首帧出生。
         # 只统计当前阶段、首帧出生、整回合零辅助的回合。
         eligible = (
             (self.episode_stage[ids] == self.stage)
             & (self.episode_force[ids] == 0)
-            & (frame_ids == 0)
+            & (self.env._getup_birth_types[ids] == 0)
         )
         # 取出有效 episode 对应的动作编号
         selected_motion_ids = motion_ids[eligible].tolist()
@@ -303,7 +302,7 @@ class GetUpAssist:
             "threshold": self.threshold,
             "final_threshold": self.final_threshold,
             "required_hold": self.required_hold,
-            "evaluation": "initial_frame_zero_assist",
+            "evaluation": "reference_initial_birth_zero_assist",
             "active_motion_ids": self.active_motion_ids,
         }
 

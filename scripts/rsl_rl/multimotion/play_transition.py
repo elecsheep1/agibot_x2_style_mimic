@@ -167,7 +167,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         print(f"[转换诊断] 辅助力上限 {args_cli.assist_force:.1f} N；自动课程关闭；训练源码不变。", flush=True)
 
         reset_params = env_cfg.events.reset_from_reference.params
-        reset_params.update(transition_frame_ranges=None, start_phase=0.0, end_phase=0.0)
+        reset_params.update(
+            transition_frame_ranges=None,
+            start_phase=0.0,
+            end_phase=0.0,
+            perturb_initial_probability=0.0,
+            perturb_state_bank=None,
+        )
         if args_cli.birth_frames is None:
             print("[验收出生] 所有动作从第0帧开始，训练混合出生已关闭。", flush=True)
         else:

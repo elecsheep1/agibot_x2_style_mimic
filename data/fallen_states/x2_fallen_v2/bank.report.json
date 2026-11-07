@@ -1,0 +1,54 @@
+{
+  "complete": true,
+  "training_ready": true,
+  "count": 3584,
+  "coverage": {
+    "0/0": 1218,
+    "0/1": 318,
+    "1/0": 1643,
+    "1/1": 405
+  },
+  "near_coverage": {
+    "0/0": 163,
+    "0/1": 29,
+    "1/0": 148,
+    "1/1": 44,
+    "2/0": 150,
+    "2/1": 42,
+    "3/0": 161,
+    "3/1": 31,
+    "4/0": 148,
+    "4/1": 44,
+    "5/0": 146,
+    "5/1": 46,
+    "6/0": 146,
+    "6/1": 46,
+    "7/0": 156,
+    "7/1": 36
+  },
+  "inputs": [
+    {
+      "path": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/data/fallen_states/x2_fallen_v1/bank.npz",
+      "sha256": "5c1e0dd1d4f8b116dba86ec71ce19c35adaa1a8837d1fc1e9d80d43a6e9998af",
+      "count": 2048,
+      "merged_begin": 0,
+      "merged_end": 2048,
+      "family_offset": 0
+    },
+    {
+      "path": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/data/fallen_states/x2_fallen_v2_additions/bank.npz",
+      "sha256": "71528e526b0466ff1fe9c8f1d2e0201607acff8b13ee65a7adfa1b05db858e7a",
+      "count": 1536,
+      "merged_begin": 2048,
+      "merged_end": 3584,
+      "family_offset": 2241
+    }
+  ],
+  "split_policy": "Original split membership preserved; family IDs offset by input; no holdout moved to train",
+  "by_source_split": {
+    "near_reference/train": 1218,
+    "near_reference/holdout": 318,
+    "simulated_fall/train": 1643,
+    "simulated_fall/holdout": 405
+  }
+}

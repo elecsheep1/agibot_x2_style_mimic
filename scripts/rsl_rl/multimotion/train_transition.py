@@ -15,6 +15,7 @@ import platform
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 
 import gymnasium as gym
 import torch
@@ -93,6 +94,10 @@ parser.add_argument(
 parser.add_argument("--external_callback", default=None, help="Fully qualified path to an externally defined callback.")
 parser.add_argument("--resume-std", type=float, default=0.30,
                     help="Reset action standard deviation after loading the checkpoint.")
+parser.add_argument(
+    "--fallen-bank", type=Path, default=None,
+    help="Enable 30% initial / 10% near / 10% fall / 50% RSI, with zero assist.",
+)
 cli_args.add_rsl_rl_args(parser)
 add_launcher_args(parser)
 args_cli, remaining_args = setup_preset_cli(parser)
@@ -202,10 +207,27 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         # set the log directory for the environment (works for all environment types)
         env_cfg.log_dir = log_dir
 
-        # Birth sampling belongs to the environment configuration.
         reset_params = env_cfg.events.reset_from_reference.params
+        if args_cli.fallen_bank is not None:
+            bank_path = args_cli.fallen_bank.expanduser().resolve()
+            if not bank_path.is_file():
+                raise FileNotFoundError(bank_path)
+            if reset_params.get("transition_frame_ranges") is None:
+                raise ValueError("Fallen-bank fine-tuning requires transition_frame_ranges")
+            reset_params.update(
+                initial_frame_probability=0.5,
+                perturb_initial_probability=0.4,
+                perturb_state_bank=str(bank_path),
+            )
+        if reset_params.get("perturb_initial_probability", 0.0) > 0.0:
+            env_cfg.assist_initial_stage = len(env_cfg.assist_force_levels) - 1
+            env_cfg.assist_zero_probability = 1.0
+            env_cfg.assist_curriculum_enabled = False
+            print("[状态库续训] 仅 train 分区；近邻/摔倒各占库分支50%；强制零辅助。", flush=True)
         print(
             f"[训练出生] cfg 首帧概率={reset_params.get('initial_frame_probability', 0.5):.0%}，"
+            f"库分支条件概率={reset_params.get('perturb_initial_probability', 0.0):.0%}，"
+            f"状态库={reset_params.get('perturb_state_bank')}，"
             f"转换区间={reset_params.get('transition_frame_ranges')}；区间为空时使用 start/end_phase。",
             flush=True,
         )

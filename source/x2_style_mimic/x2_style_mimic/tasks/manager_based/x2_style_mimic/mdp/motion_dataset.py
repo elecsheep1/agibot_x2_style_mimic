@@ -164,13 +164,14 @@ class MotionDataset:
             # 保留原采样方式，兼容现有训练和 play。
             lower = torch.floor(start_phase * last).long()
             upper = torch.floor(end_phase * last).long()
+            use_initial = None
         else:
             if not (0.0 <= initial_frame_probability <= 1.0):
                 raise ValueError("initial_frame_probability 必须在 [0, 1] 内")
             if len(transition_frame_ranges) != len(self.clips):
                 raise ValueError("转换区间数量必须与 motions 中的动作数量一致")
 
-            for motion_id, bounds in enumerate(transition_frame_ranges):
+            for motion_id, bounds in enumerate(transition_frame_ranges):        # 遍历每个动作的转换帧区间
                 if len(bounds) != 2:
                     raise ValueError("每个转换区间必须包含起止帧")
 
@@ -235,8 +236,13 @@ class MotionDataset:
                 # 写入结果对应环境的位置
                 result[key][rows] = clip[key][frames]
 
+        # 没有混合采样区间时，兼容固定首帧/固定相位回放。
+        if use_initial is None:
+            use_initial = frame_ids == 0
+
         result["motion_ids"] = motion_ids
         result["frame_ids"] = frame_ids
+        result["initial_branch"] = use_initial
         return result
 
     def sample_amp_windows(self, batch_size, num_steps=5):
