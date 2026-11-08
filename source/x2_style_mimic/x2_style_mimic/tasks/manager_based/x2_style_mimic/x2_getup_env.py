@@ -97,9 +97,52 @@ class X2MultiMotionGetUpEnv(X2AMPGetUpEnv):
         birth_types = self._getup_birth_types.clone()
         bank_row_ids = self._getup_bank_row_ids.clone()
 
+        monitor = self.scene.sensors["self_contact"]
+        if self._physics_handles_decimation:
+            raise RuntimeError("当前监测实现需要逐物理子步 scene.update；请先处理后端代管 decimation 的兼容性")
+
+        monitor.begin_control_window()
+
+        # 保存自动重置前的终止步监测值。
+        self._self_contact_terminal = {
+            name: torch.zeros_like(value)
+            for name, value in monitor.snapshot().items()
+        }
+        self._self_contact_terminal_mask = torch.zeros(
+            self.num_envs,
+            dtype=torch.bool,
+            device=self.device,
+        )
         self._getup_assist.apply()
-        result = super().step(action)
+
+        try:
+            result = super().step(action)
+        finally:
+            monitor.end_control_window()
+
         observations, rewards, terminated, truncated, extras = result
+        contact_metrics = monitor.snapshot()
+
+        # 已自动重置的环境，其传感器缓存已经清零。
+        # 用 _reset_idx 中保存的终止步数据替换。
+        terminal_mask = self._self_contact_terminal_mask
+
+        for name, value in contact_metrics.items():
+            value[terminal_mask] = (
+                self._self_contact_terminal[name][terminal_mask]
+            )
+
+        updates = contact_metrics["updates_per_control_step"]
+
+        if not bool((updates == self.cfg.decimation).all()):
+            raise RuntimeError("自接触采样次数不等于 decimation，存在漏采或重复采样")
+
+        extras["self_contact"] = contact_metrics
+
+        log = extras.setdefault("log", {})
+        for name, value in contact_metrics.items():
+            log[f"SelfContact/{name}"] = value.mean().item()
+
 
         # 计时器在终止判断阶段保存了重置前的快照。
         snapshot = self._getup_progress_snapshot
@@ -142,6 +185,18 @@ class X2MultiMotionGetUpEnv(X2AMPGetUpEnv):
 
     def _reset_idx(self, env_ids):
         episode_stats = None
+
+        if (
+            getattr(self, "_amp_capture_active", False)
+            and hasattr(self, "_self_contact_terminal")
+            and len(env_ids) > 0
+        ):
+            terminal_contact = (
+                self.scene.sensors["self_contact"].snapshot(env_ids)
+            )
+            for name, value in terminal_contact.items():
+                self._self_contact_terminal[name][env_ids] = value
+            self._self_contact_terminal_mask[env_ids] = True
 
         # 初始化或手动 reset 不算已完成的训练回合。
         # 只在真实 step 引起自动重置时统计。

@@ -28,6 +28,7 @@ from .x2_style_mimic_env_cfg import (
     X2StyleMimicEnvCfg,
     X2StyleMimicSceneCfg,
 )
+from .mdp.self_contact_cfg import SelfContactSensorCfg
 
 PROJECT_DIR = Path(__file__).resolve().parents[6]
 MOTION_MANIFEST = (
@@ -80,6 +81,12 @@ class GetUpSceneCfg(X2StyleMimicSceneCfg):
 
     right_hand_ground_contact = _ground_sensor(
         _ROBOT_PATH + "/.*right_wrist_roll_link"
+    )
+
+    self_contact = SelfContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot",
+        update_period=0.0,
+        debug_vis=False,
     )
 
 @configclass
@@ -159,7 +166,7 @@ class GetUpEventsCfg:
             "height_offset": 0.01,
             "initial_frame_probability": 0.5,
             "perturb_initial_probability": 0.4,
-            "perturb_state_bank": str(PROJECT_DIR / "data/fallen_states/x2_fallen_v1/bank.npz"),
+            "perturb_state_bank": str(PROJECT_DIR / "data/fallen_states/x2_fallen_v2_hipfiltered/bank.npz"),
             "transition_frame_ranges": (
                 (0, 543),  # x2_getup_139_16_umr_v1_50hz.npz
                 (0, 598),  # x2_getup_139_17_umr_v1_50hz.npz
@@ -236,6 +243,12 @@ class GetUpRewardsCfg:
         },
     )
 
+    self_contact = RewTerm(
+        func=mdp.self_contact_penalty,
+        weight=-0.1,
+        params={"sensor_cfg": SceneEntityCfg("self_contact")},
+    )
+
     out_of_bounds_failure = RewTerm(
         func=getup_mdp.out_of_bounds_failure,
         weight=-5.0,
@@ -310,7 +323,7 @@ class X2MultiMotionGetUpEnvCfg(X2StyleMimicEnvCfg):
     events: GetUpEventsCfg = GetUpEventsCfg()
     actions: GetUpActionsCfg = GetUpActionsCfg()
 
-    # 保留现有环境所需字段，默认使用零辅助力。
+    # 从零训练使用高度衰减辅助课程，保留 30% 零辅助回合。
     assist_force_levels: tuple = (100.0, 75.0, 50.0, 25.0, 0.0)
     assist_initial_stage: int = 0
     assist_zero_probability: float = 0.30

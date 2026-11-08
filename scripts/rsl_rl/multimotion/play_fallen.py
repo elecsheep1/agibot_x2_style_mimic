@@ -27,6 +27,7 @@ def main():
     parser.add_argument('--trace', action='store_true', help='Save pre-step state every 0.1s for targeted diagnosis')
     parser.add_argument('--trace-rows',type=int,nargs='+',default=None)
     parser.add_argument('--detailed-trace',action='store_true',help='Script-only contact/target/estimated-PD diagnostics')
+    parser.add_argument('--self-contact-audit',action='store_true')
     parser.add_argument('--real-time',action='store_true')
     required=[x for x in parser._actions if x.required]
     for x in required:x.required=False
@@ -60,7 +61,7 @@ def main():
     params.update(bank_path=str(args.bank.resolve()),bank_split=args.split,bank_source=args.source,bank_rows=args.rows,bank_center_xy=args.center_xy)
     cfg.events.reset_from_reference.func=reset_from_bank_for_eval
     cfg.events.reset_from_reference.params=params
-    records=[];complete=False;verified_steps=0;traces=[]
+    records=[];complete=False;verified_steps=0;traces=[];contact_audit=None
     with launch_simulation(cfg,args):
         from x2_style_mimic.tasks.manager_based.x2_style_mimic.x2_getup_env import X2MultiMotionGetUpEnv
         from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper
@@ -82,6 +83,9 @@ def main():
                 from checks.build_fallen_state_bank import Geometry, Contacts
                 geometry=Geometry(env.sim.stage,list(env.scene['robot'].body_names),env.device)
                 contacts=Contacts(geometry,env.num_envs,float(cfg.sim.dt),env.device,262144)
+            if args.self_contact_audit:
+                from common.self_contact_audit import SelfContactAudit
+                contact_audit=SelfContactAudit(env.step_dt)
             seen=set();required_hold=float(cfg.terminations.progress.params['hold_time'])
             while len(seen)<len(selected):
                 started=time.monotonic()
@@ -121,8 +125,11 @@ def main():
                                     self_force_pairs=[dict(body_a=robot.body_names[int(k)//contacts.b],body_b=robot.body_names[int(k)%contacts.b],force_n=float(v)) for v,k in zip(top.values,top.indices) if float(v)>1.],
                                     ground_min_separation_m=float(contact_metrics[2][e]),self_min_separation_m=float(contact_metrics[3][e]))
                     actions=policy(obs)
-                    obs,_,dones,extras=wrapped.step(actions)
+                    obs,task_rewards,dones,extras=wrapped.step(actions)
                     progress=extras['getup_progress']
+                    if contact_audit is not None:
+                        valid=(serial<len(selected)) & torch.tensor([int(x) not in seen for x in index],device=env.device)
+                        contact_audit.update(env,extras,index,valid,task_rewards)
                     if bool((progress['assist_applied_force_n'].abs()>1e-6).any()):
                         raise RuntimeError('Nonzero assist during fallen-bank acceptance')
                     verified_steps+=1
@@ -155,7 +162,7 @@ def main():
                 bank=str(args.bank.resolve()),split=args.split,source=args.source,seed=args.seed,
                 zero_assist_verified=verified_steps>0,verified_steps=verified_steps,required_hold_seconds=float(cfg.terminations.progress.params['hold_time']),
                 overall=stats(records),by_source={name:stats([r for r in records if r['source_type']==i])
-                    for i,name in [(0,'near_reference'),(1,'simulated_fall')]},num_envs=env.num_envs,detailed_trace=args.detailed_trace,torque_note='PD estimate only, not actual drive measurement; self contacts subject to asset collision filters',center_xy=args.center_xy,episodes=records,traces=traces,joint_names=env.scene['robot'].joint_names,body_names=env.scene['robot'].body_names)
+                    for i,name in [(0,'near_reference'),(1,'simulated_fall')]},num_envs=env.num_envs,detailed_trace=args.detailed_trace,torque_note='PD estimate only, not actual drive measurement; self contacts subject to asset collision filters',self_contact_audit=contact_audit.report() if contact_audit is not None else None,center_xy=args.center_xy,episodes=records,traces=traces,joint_names=env.scene['robot'].joint_names,body_names=env.scene['robot'].body_names)
             args.report.parent.mkdir(parents=True,exist_ok=True)
             args.report.write_text(json.dumps(report,indent=2))
             print(json.dumps(report['overall']),flush=True)

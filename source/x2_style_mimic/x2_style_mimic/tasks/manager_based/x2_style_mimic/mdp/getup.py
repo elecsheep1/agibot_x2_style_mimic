@@ -400,7 +400,7 @@ def standing_quality(
     # ------------------------------- 高度指标 ------------------------------
     # 从低位到站立高度提供连续反馈。
     height_progress = (
-        (height - 0.08) / (0.63 - 0.08)
+        (height - 0.08) / (0.63 - 0.08)     # 高度范围从 0.08 到 0.63 米
     ).clamp(0.0, 1.0)
 
     # ------------------------------- 姿态指标 ------------------------------
@@ -495,6 +495,96 @@ def standing_quality_reward(
         wrist_load=wrist_load,
     )
     return standing_reward
+
+
+def standing_limb_quality(
+    env: ManagerBasedRLEnv,
+    joint_cfg: SceneEntityCfg,
+    feet_cfg: SceneEntityCfg,
+    joint_targets: tuple[float, ...],
+    stance_width: float = 0.34,
+    toe_out_rad: float = 0.08726646,     # 左右各外展 5°
+) -> torch.Tensor:
+    robot = env.scene["robot"]
+
+    # ---------- 肩、肘、腕 ----------
+    q = robot.data.joint_pos.torch[:, joint_cfg.joint_ids]
+    target = q.new_tensor(joint_targets)
+
+    if target.numel() != q.shape[1]:
+        raise ValueError("站姿目标角数量与选中的关节数量不一致")
+
+    # 允许约 5.7° 偏差，超出后再降低评分。
+    joint_error = (q - target).abs().sub(0.10).clamp_min(0.0)
+    arm_quality = torch.exp(-(joint_error / 0.30).square().mean(dim=-1))
+
+    # ---------- 骨盆朝向 ----------
+    # 当前项目四元数顺序为 XYZW。
+    root_q = robot.data.root_link_pose_w.torch[:, 3:7]
+    root_q = root_q / root_q.norm(dim=-1, keepdim=True).clamp_min(1e-8)
+
+    x, y, z, w = root_q.unbind(dim=-1)
+    yaw = torch.atan2(
+        2.0 * (w * z + x * y),
+        1.0 - 2.0 * (y.square() + z.square()),
+    )
+    c, s = yaw.cos(), yaw.sin()
+
+    # feet_cfg 必须保持左脚、右脚的顺序。
+    feet = robot.data.body_link_pose_w.torch[:, feet_cfg.body_ids]
+    if feet.shape[1] != 2:
+        raise ValueError("feet_cfg 必须按左、右顺序匹配两个踝刚体")
+
+    # ---------- 双脚站宽和前后错位 ----------
+    delta = feet[:, 0, :3] - feet[:, 1, :3]
+    delta_x = c * delta[:, 0] + s * delta[:, 1]
+    delta_y = -s * delta[:, 0] + c * delta[:, 1]
+
+    # 目标站宽允许 ±4 cm；前后错位允许 ±4 cm。
+    width_error = ((delta_y - stance_width).abs() - 0.04).clamp_min(0.0)
+    stagger_error = (delta_x.abs() - 0.04).clamp_min(0.0)
+
+    placement_quality = torch.exp(
+        -(width_error / 0.08).square()
+        -(stagger_error / 0.08).square()
+    )
+
+    # ---------- 脚尖方向 ----------
+    foot_q = feet[:, :, 3:7]
+    foot_q = foot_q / foot_q.norm(dim=-1, keepdim=True).clamp_min(1e-8)
+
+    fx, fy, fz, fw = foot_q.unbind(dim=-1)
+
+    # 踝刚体局部 +X 轴在世界水平面上的方向。
+    forward_x = 1.0 - 2.0 * (fy.square() + fz.square())
+    forward_y = 2.0 * (fx * fy + fw * fz)
+
+    foot_yaw = torch.atan2(
+        -s[:, None] * forward_x + c[:, None] * forward_y,
+        c[:, None] * forward_x + s[:, None] * forward_y,
+    )
+
+    target_foot_yaw = foot_yaw.new_tensor(
+        [toe_out_rad, -toe_out_rad]
+    )
+    foot_yaw_delta = foot_yaw - target_foot_yaw
+    foot_yaw_error = torch.atan2(
+        foot_yaw_delta.sin(), foot_yaw_delta.cos()
+    ).abs()
+
+    # 允许目标方向附近 ±5°。
+    foot_yaw_error = (foot_yaw_error - 0.08726646).clamp_min(0.0)
+    direction_quality = torch.exp(
+        -(foot_yaw_error / 0.17453293).square().mean(dim=-1)
+    )
+
+    return (
+        0.50 * arm_quality
+        + 0.30 * placement_quality
+        + 0.20 * direction_quality
+    )
+
+
 
 # 终止与成功条件
 def out_of_bounds(

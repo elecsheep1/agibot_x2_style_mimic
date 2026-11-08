@@ -22,7 +22,11 @@ def main():
     parser.add_argument('--source',choices=['all','near','fall'],default='all')
     parser.add_argument('--num-envs',type=int,default=16)
     parser.add_argument('--seed',type=int,default=42)
-    parser.add_argument('--real-time',action='store_true')
+    parser.add_argument('--self-contact-audit',action='store_true')
+    parser.add_argument('--steps',type=int,default=1100)
+    parser.add_argument('--warmup-steps',type=int,default=20)
+    parser.add_argument('--reset-repeats',type=int,default=8)
+    parser.add_argument('--real-time' ,action='store_true')
     required=[x for x in parser._actions if x.required]
     for x in required:x.required=False
     try:add_launcher_args(parser)
@@ -31,7 +35,7 @@ def main():
     args,rest=setup_preset_cli(parser);sys.argv=[sys.argv[0]]+rest
     if not args.checkpoint.is_file():parser.error('Checkpoint not found')
     if args.report.exists():parser.error('Report exists; choose a new path')
-    if args.num_envs<1:parser.error('num-envs must be positive')
+    if args.num_envs<1 or args.steps<1 or args.reset_repeats<1 or not 0<=args.warmup_steps<args.steps:parser.error('Invalid steps, warmup, resets or env count')
     import x2_style_mimic.tasks
     cfg,agent=resolve_task_config('X2-Prone-MultiMotion-v0','rsl_rl_cfg_entry_point')
     from isaaclab_rl.rsl_rl import handle_deprecated_rsl_rl_cfg
@@ -45,12 +49,14 @@ def main():
     cfg.events.reset_from_reference.params.update(
         initial_frame_probability=0.5, perturb_initial_probability=0.4,
         perturb_state_bank=str(args.bank.resolve()))
-    records=[];complete=False;verified_steps=0
+    records=[];complete=False;verified_steps=0;contact_aggregate={};contact_samples=0;contact_audit=None
     with launch_simulation(cfg,args):
         from x2_style_mimic.tasks.manager_based.x2_style_mimic.x2_getup_env import X2MultiMotionGetUpEnv
         from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper
         from rsl_rl.runners import OnPolicyRunner
         torch.manual_seed(args.seed)
+        setup_started=time.perf_counter()
+        if torch.cuda.is_available():torch.cuda.reset_peak_memory_stats()
         env=X2MultiMotionGetUpEnv(cfg=cfg)
         try:
             wrapped=RslRlVecEnvWrapper(env,clip_actions=agent.clip_actions)
@@ -118,19 +124,49 @@ def main():
                         assert float(error)<1e-4, f'Birth state mismatch: {name}={float(error)}'
                     birth_checks['bank_samples']+=int(mask.sum())
             # Several real resets exercise all branches without stepping a reference pose.
-            for _ in range(8):
+            for _ in range(args.reset_repeats):
                 wrapped.reset()
                 check_births()
+                monitor=env.scene.sensors.get('self_contact')
+                if monitor is not None:
+                    for value in monitor.snapshot().values():
+                        assert bool((value==0).all()), 'Self-contact reset left stale metrics'
+                    assert bool((monitor.duration==0).all()), 'Self-contact duration was not reset'
             assert all(counts.values()), counts
             obs=wrapped.get_observations()
-            for step in range(1100):
+            if args.self_contact_audit:
+                from common.self_contact_audit import SelfContactAudit
+                contact_audit=SelfContactAudit(env.step_dt)
+            setup_seconds=time.perf_counter()-setup_started
+            benchmark_started=None
+            for step in range(args.steps):
+                if step==args.warmup_steps:
+                    if torch.cuda.is_available():torch.cuda.synchronize()
+                    benchmark_started=time.perf_counter()
                 old_rows=env._getup_bank_row_ids.clone()
                 with torch.inference_mode():
-                    obs,_,dones,extras=wrapped.step(policy(obs))
+                    obs,task_rewards,dones,extras=wrapped.step(policy(obs))
                     progress=extras['getup_progress']
+                    if contact_audit is not None:
+                        contact_audit.update(env,extras,torch.arange(env.num_envs,device=env.device),torch.ones(env.num_envs,dtype=torch.bool,device=env.device),task_rewards)
                     assert bool((progress['assist_applied_force_n'].abs()<1e-6).all())
                     assert torch.equal(progress['bank_row_ids'],old_rows)
                     assert bool(torch.isfinite(env.scene['robot'].data.root_link_pose_w.torch).all())
+                    if 'self_contact' in extras:
+                        for name,values in extras['self_contact'].items():
+                            values=values.detach()
+                            if name not in contact_aggregate:
+                                contact_aggregate[name]=dict(sum=torch.zeros((),device=values.device),
+                                    min=torch.full((),float('inf'),device=values.device),
+                                    max=torch.full((),float('-inf'),device=values.device))
+                            a=contact_aggregate[name]
+                            a['sum'].add_(values.sum())
+                            a['min'].copy_(torch.minimum(a['min'],values.min()))
+                            a['max'].copy_(torch.maximum(a['max'],values.max()))
+                        contact_samples+=env.num_envs
+                        monitor=env.scene.sensors['self_contact']
+                        if bool(dones.any()):
+                            assert bool((monitor.duration[dones.bool()]==0).all()), 'Automatic reset retained duration'
                     verified_steps+=1
                     for e in dones.nonzero().flatten().tolist():
                         records.append(dict(birth_type=int(progress['birth_types'][e]),
@@ -138,14 +174,26 @@ def main():
                             succeeded=bool(progress['succeeded'][e])))
                     policy.reset(dones)
                 if step%250==0:print(f'[mixed smoke] steps={step} completed={len(records)}',flush=True)
-            assert records, 'No completed episode'
+            if torch.cuda.is_available():torch.cuda.synchronize()
+            benchmark_seconds=time.perf_counter()-benchmark_started
+            if args.steps>=round(cfg.episode_length_s/env.step_dt):
+                assert records, 'No completed episode'
             complete=True
         except KeyboardInterrupt:
             print('Interrupted; saving partial acceptance report',flush=True)
         finally:
             report=dict(complete=complete,checkpoint=str(args.checkpoint.resolve()),
                 bank=str(args.bank.resolve()),verified_steps=verified_steps,
-                reset_counts=locals().get('counts',{}),birth_checks=locals().get('birth_checks',{}),episodes=records)
+                performance=dict(setup_seconds=locals().get('setup_seconds'),benchmark_seconds=locals().get('benchmark_seconds'),
+                    measured_control_steps=max(0,verified_steps-args.warmup_steps),
+                    environment_steps_per_second=(max(0,verified_steps-args.warmup_steps)*env.num_envs/benchmark_seconds) if locals().get('benchmark_seconds') else None,
+                    torch_peak_allocated_mb=torch.cuda.max_memory_allocated()/2**20 if torch.cuda.is_available() else None,
+                    torch_peak_reserved_mb=torch.cuda.max_memory_reserved()/2**20 if torch.cuda.is_available() else None,
+                    driver_used_mb=(torch.cuda.mem_get_info()[1]-torch.cuda.mem_get_info()[0])/2**20 if torch.cuda.is_available() else None,
+                    note='Inference smoke throughput, not PPO training; driver memory includes all processes'),
+                reset_counts=locals().get('counts',{}),birth_checks=locals().get('birth_checks',{}),
+                self_contact_audit=contact_audit.report() if contact_audit is not None else None,
+                self_contact={k:dict(min=float(v['min']),max=float(v['max']),mean=float(v['sum'])/max(1,contact_samples)) for k,v in contact_aggregate.items()},episodes=records)
             args.report.parent.mkdir(parents=True,exist_ok=True)
             args.report.write_text(json.dumps(report,indent=2))
             print(json.dumps({k:v for k,v in report.items() if k!='episodes'}),flush=True)

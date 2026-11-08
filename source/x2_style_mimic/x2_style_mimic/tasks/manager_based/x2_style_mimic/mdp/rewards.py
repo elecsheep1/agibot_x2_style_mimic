@@ -46,3 +46,26 @@ def feet_slide(
     )
 
     return torch.sum(speed_squared * in_contact, dim=1)
+
+
+def self_contact_history_count(
+    force_history: torch.Tensor,
+    force_threshold: float = 10.0,
+) -> torch.Tensor:
+    """统计最近物理采样中出现自身接触的次数，每个采样最多计一次。
+
+    force_history: [num_envs, history_length]，每个采样所有配对的最大力模长。
+    不按接触对数量加倍，不使用持续时间门控，也不在此乘 dt 或负权重。
+    """
+    return (force_history > force_threshold).sum(dim=-1).float()
+
+
+def self_contact_penalty(
+    env: ManagerBasedRLEnv,
+    sensor_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+    """历史自身接触计数，读取缓存而不推进传感器。"""
+    sensor = env.scene.sensors[sensor_cfg.name]
+    return self_contact_history_count(
+        sensor.force_history, sensor.cfg.force_threshold
+    )

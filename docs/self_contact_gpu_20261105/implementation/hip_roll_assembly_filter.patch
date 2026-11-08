@@ -1,0 +1,18 @@
+--- source/x2_style_mimic/x2_style_mimic/assets/robots/x2_ultra/x2_ultra/x2_ultra.usda
++++ source/x2_style_mimic/x2_style_mimic/assets/robots/x2_ultra/x2_ultra/x2_ultra.usda
+@@ -31,9 +31,14 @@
+     over "Geometry"
+     {
+         over "base_link" (
+-            prepend apiSchemas = ["PhysxContactReportAPI"]
++            prepend apiSchemas = ["PhysxContactReportAPI", "PhysicsFilteredPairsAPI"]
+         )
+         {
++            # Assembly convex hulls overlap during legal hip adduction.
++            prepend rel physics:filteredPairs = [
++                </x2_ultra/Geometry/base_link/left_hip_pitch_link/left_hip_roll_link>,
++                </x2_ultra/Geometry/base_link/right_hip_pitch_link/right_hip_roll_link>,
++            ]
+             float physxContactReport:threshold = 0
+ 
+             over "left_hip_pitch_link" (
