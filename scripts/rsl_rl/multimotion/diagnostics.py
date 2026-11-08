@@ -54,7 +54,7 @@ def pelvis_pose(env, params):
 def standing_reward_comparison(env, params):
     """Evaluate the existing reward twice, changing only its root_up input."""
     from x2_style_mimic.tasks.manager_based.x2_style_mimic.mdp.getup import (
-        ground_contact_force, standing_quality, standing_quality_reward,
+        ground_contact_force, standing_limb_quality, standing_quality, standing_quality_reward,
     )
     robot = env.scene["robot"]
     q = robot.data.body_link_pose_w.torch[:, params["torso_cfg"].body_ids, 3:7]
@@ -72,8 +72,17 @@ def standing_reward_comparison(env, params):
             ground_contact_force(env, cfg) for cfg in params["wrist_sensor_cfgs"]
         ], dim=-1).sum(dim=-1),
     )
-    # Current production reward returns standing_quality directly; the former
-    # default-joint-pose multiplier was removed before the AMP175 experiment.
+    # Keep limb inputs fixed in the root_up-only formula comparison.
+    inputs["limb_fraction"] = params.get("limb_fraction", 0.10)
+    if params.get("limb_joint_cfg") is not None:
+        inputs["limb_quality"] = standing_limb_quality(
+            env,
+            joint_cfg=params["limb_joint_cfg"],
+            feet_cfg=params.get("feet_cfg"),
+            joint_targets=params.get("limb_joint_targets"),
+            stance_width=params.get("stance_width", 0.34),
+            toe_out_rad=params.get("toe_out_rad", 0.08726646),
+        )
     actual = standing_quality(**inputs)
     # Verify the replay-side input extraction against the production reward.
     expected = standing_quality_reward(env, **params)

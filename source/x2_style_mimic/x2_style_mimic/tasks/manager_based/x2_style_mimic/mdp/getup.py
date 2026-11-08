@@ -394,6 +394,8 @@ def standing_quality(
     angular_velocity,
     feet_support,
     wrist_load,
+    limb_quality=None,
+    limb_fraction=0.10,
 ):
     """有界站立质量，输出范围约为 [0, 1]。"""
 
@@ -431,16 +433,30 @@ def standing_quality(
     support_quality = feet_support * torch.exp(
         -wrist_load / 20.0
     )
+    # ---------------------------- 站立分数 ----------------------------
+    standing_score = (
+        0.65 * stability_quality
+        + 0.35 * support_quality
+    )
+    # ---------------------------- 手脚质量因子 ----------------------------
+    if not 0.0 <= limb_fraction <= 1.0:
+        raise ValueError("limb_fraction 必须在 [0, 1] 内")
+    # 未配置手脚评分时，保持原有奖励行为。
+    if limb_quality is None:
+        limb_quality = torch.ones_like(height)
+    # 手脚姿态只影响现有站立分支，不重复奖励高度或稳定性。
+    limb_factor = (
+        1.0 - limb_fraction
+        + limb_fraction * limb_quality.clamp(0.0, 1.0)
+    )
 
     return (
         0.35 * geometry_quality
         + 0.65
         * near_standing
         * upright_gate
-        * (
-            0.65 * stability_quality
-            + 0.35 * support_quality
-        )
+        * standing_score
+        * limb_factor
     )
 
 def standing_quality_reward(
@@ -448,6 +464,12 @@ def standing_quality_reward(
     torso_cfg: SceneEntityCfg,
     ground_sensor_cfgs: tuple[SceneEntityCfg, ...],
     wrist_sensor_cfgs: tuple[SceneEntityCfg, ...],
+    limb_joint_cfg: SceneEntityCfg | None = None,
+    feet_cfg: SceneEntityCfg | None = None,
+    limb_joint_targets: tuple[float, ...] | None = None,
+    stance_width: float = 0.34,
+    toe_out_rad: float = 0.08726646,
+    limb_fraction: float = 0.10,
 ):
     robot = env.scene["robot"]
 
@@ -485,6 +507,19 @@ def standing_quality_reward(
 
     root_velocity = robot.data.root_link_vel_w.torch
 
+    limb_quality = None
+
+    if limb_joint_cfg is not None:
+        limb_quality = standing_limb_quality(
+            env,
+            joint_cfg=limb_joint_cfg,
+            feet_cfg=feet_cfg,
+            joint_targets=limb_joint_targets,
+            stance_width=stance_width,
+            toe_out_rad=toe_out_rad,
+        )
+
+
     standing_reward = standing_quality(
         height=height,
         root_up=root_up,
@@ -493,6 +528,8 @@ def standing_quality_reward(
         angular_velocity=root_velocity[:, 3:6],
         feet_support=feet_support,
         wrist_load=wrist_load,
+        limb_quality=limb_quality,
+        limb_fraction=limb_fraction
     )
     return standing_reward
 

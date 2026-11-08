@@ -11,6 +11,8 @@ from isaaclab.managers import (
     RewardTermCfg as RewTerm,
     SceneEntityCfg,
 )
+from isaaclab.envs import mdp as isaac_mdp
+from isaaclab.utils.noise import UniformNoiseCfg
 
 from . import mdp
 from .mdp import getup as getup_mdp
@@ -101,6 +103,13 @@ class GetUpObservationsCfg(ObservationsCfg):
             self.history_length = 5
             self.flatten_history_dim = True
 
+            self.enable_corruption = True
+            self.base_ang_vel.noise = UniformNoiseCfg(n_min=-0.05, n_max=0.05,)
+            self.projected_gravity.noise = UniformNoiseCfg(n_min=-0.01, n_max=0.01,)
+            self.joint_pos_rel.noise = UniformNoiseCfg(n_min=-0.01, n_max=0.01,)
+            self.joint_vel_rel.noise = UniformNoiseCfg(n_min=-0.10, n_max=0.10,)
+            self.last_action.noise = None
+
     policy: PolicyCfg = PolicyCfg()
 
     @configclass
@@ -180,6 +189,50 @@ class GetUpEventsCfg:
         },
     )
 
+    randomize_material = EventTerm(
+        func=isaac_mdp.randomize_rigid_body_material,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
+            "static_friction_range": (0.6, 1.0),
+            "dynamic_friction_range": (0.5, 0.9),
+            "restitution_range": (0.0, 0.05),    # 机器人碰撞材质的恢复系数
+            "num_buckets": 65,                   # 预采样65组材质参数，再随机分配给碰撞形状
+            "make_consistent": True,             # 保证动态摩擦系数不超过静态摩擦系数
+        },
+    )
+
+    randomize_mass = EventTerm(
+        func=isaac_mdp.randomize_rigid_body_mass,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg(
+                "robot",
+                body_names=["base_link", "torso_link"],
+            ),
+            "mass_distribution_params": (0.90, 1.10),   # 质量分布范围，随机缩放质量。
+            "operation": "scale",                       # 缩放质量，而不是直接设置质量。
+            "distribution": "uniform",                  # 随机分布类型，均匀分布。
+            "recompute_inertia": True,                  # 缩放质量后重新计算惯性张量。
+        },
+    )
+
+    randomize_gains = EventTerm(
+        func=isaac_mdp.randomize_actuator_gains,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg(
+                "robot",
+                joint_names=POLICY_JOINT_NAMES,
+                preserve_order=True,
+            ),
+            "stiffness_distribution_params": (0.90, 1.10),   # 随机缩放刚度。
+            "damping_distribution_params": (0.90, 1.10),     # 随机缩放阻尼。
+            "operation": "scale",
+            "distribution": "uniform",
+        },
+    )
+
 @configclass
 class GetUpRewardsCfg:
     standing = RewTerm(
@@ -199,6 +252,42 @@ class GetUpRewardsCfg:
                 SceneEntityCfg("left_hand_ground_contact"),
                 SceneEntityCfg("right_hand_ground_contact"),
             ),
+            "limb_joint_cfg": SceneEntityCfg(
+                "robot",
+                joint_names=[
+                    "left_shoulder_pitch_joint",
+                    "left_shoulder_roll_joint",
+                    "left_shoulder_yaw_joint",
+                    "left_elbow_joint",
+                    "left_wrist_yaw_joint",
+                    "left_wrist_pitch_joint",
+                    "left_wrist_roll_joint",
+                    "right_shoulder_pitch_joint",
+                    "right_shoulder_roll_joint",
+                    "right_shoulder_yaw_joint",
+                    "right_elbow_joint",
+                    "right_wrist_yaw_joint",
+                    "right_wrist_pitch_joint",
+                    "right_wrist_roll_joint",
+                ],
+                preserve_order=True,
+            ),
+            # 顺序必须与上面的 joint_names 完全一致。
+            "limb_joint_targets": (
+                0.20,  0.15, 0.0, -0.30, 0.0, 0.0, 0.0,
+                0.20, -0.15, 0.0, -0.30, 0.0, 0.0, 0.0,
+            ),
+            "feet_cfg": SceneEntityCfg(
+                "robot",
+                body_names=[
+                    "left_ankle_roll_link",
+                    "right_ankle_roll_link",
+                ],
+                preserve_order=True,
+            ),
+            "stance_width": 0.34,
+            "toe_out_rad": 0.08726646,
+            "limb_fraction": 0.10,
         },
     )
 
