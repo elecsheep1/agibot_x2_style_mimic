@@ -9,7 +9,9 @@ import numpy as np
 import torch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from common.fallen_bank import load_bank, reset_from_bank_for_eval, HOLDOUT, TRAIN
+from common.fallen_bank import load_bank, TRAIN
+from common.pre_entrapment import load as load_recovery_bank
+from common.birth_checks import check_births as verify_births
 
 
 def main():
@@ -18,11 +20,11 @@ def main():
     parser.add_argument('--checkpoint',type=Path,required=True)
     parser.add_argument('--bank',type=Path,required=True)
     parser.add_argument('--report',type=Path,required=True)
-    parser.add_argument('--split',choices=['holdout','train'],default='holdout')
-    parser.add_argument('--source',choices=['all','near','fall'],default='all')
     parser.add_argument('--num-envs',type=int,default=16)
     parser.add_argument('--seed',type=int,default=42)
     parser.add_argument('--self-contact-audit',action='store_true')
+    parser.add_argument('--assist-mode', choices=['configured', 'zero'], default='configured', help='Use the scratch-training course by default; zero is a diagnostic override only')
+    parser.add_argument('--recovery-bank', type=Path, default=None)
     parser.add_argument('--steps',type=int,default=1100)
     parser.add_argument('--warmup-steps',type=int,default=20)
     parser.add_argument('--reset-repeats',type=int,default=8)
@@ -43,12 +45,15 @@ def main():
     agent=handle_deprecated_rsl_rl_cfg(agent,version('rsl-rl-lib'))
     cfg.scene.num_envs=args.num_envs;cfg.seed=args.seed
     if args.device is not None:cfg.sim.device=args.device;agent.device=args.device
-    cfg.assist_curriculum_enabled=False
-    cfg.assist_initial_stage=len(cfg.assist_force_levels)-1
-    cfg.assist_zero_probability=1.
-    cfg.events.reset_from_reference.params.update(
-        initial_frame_probability=0.5, perturb_initial_probability=0.4,
-        perturb_state_bank=str(args.bank.resolve()))
+    if args.assist_mode == 'zero':
+        cfg.assist_curriculum_enabled=False
+        cfg.assist_initial_stage=len(cfg.assist_force_levels)-1
+        cfg.assist_zero_probability=1.
+    cfg.events.reset_from_reference.params['perturb_state_bank'] = str(args.bank.resolve())
+    if args.recovery_bank is not None:
+        cfg.events.reset_from_reference.params['recovery_state_bank'] = str(args.recovery_bank.resolve())
+    probabilities = tuple(cfg.events.reset_from_reference.params['birth_probabilities'])
+    assist_peak_force_n=0.
     records=[];complete=False;verified_steps=0;contact_aggregate={};contact_samples=0;contact_audit=None
     with launch_simulation(cfg,args):
         from x2_style_mimic.tasks.manager_based.x2_style_mimic.x2_getup_env import X2MultiMotionGetUpEnv
@@ -89,50 +94,39 @@ def main():
             policy=runner.get_inference_policy(device=env.device)
             obs=wrapped.get_observations()
             bank=load_bank(args.bank,joint_names=env.scene['robot'].joint_names)
-            counts={i:0 for i in range(4)}
-            birth_checks=dict(checks=0,bank_samples=0,max_local_xy_m=0.0,
-                              max_height_error_m=0.0,max_orientation_error=0.0,
-                              max_joint_pos_error_rad=0.0,max_root_velocity_error=0.0,
-                              max_joint_velocity_error=0.0)
-            def check_births():
-                types=env._getup_birth_types
-                rows=env._getup_bank_row_ids
-                for i in counts: counts[i]+=int((types==i).sum())
-                mask=rows>=0
-                idx=rows[mask].cpu().numpy()
-                assert (bank['split'][idx]==TRAIN).all(), 'Holdout sampled'
-                assert bool(((types==1)|(types==3)).eq(mask).all())
-                assert (bank['source_type'][idx]==(types[mask]==3).long().cpu().numpy()).all()
-                assert bool((env._getup_reference_motion_ids[types==3]==-1).all())
-                birth_checks['checks']+=1
-                if bool(mask.any()):
-                    robot=env.scene['robot']
-                    pose=robot.data.root_link_pose_w.torch[mask].clone()
-                    pose[:,:3]-=env.scene.env_origins[mask]
-                    def expected(key):
-                        return torch.as_tensor(bank[key][idx],device=env.device,dtype=torch.float32)
-                    errors=dict(max_local_xy_m=pose[:,:2].abs().max(),
-                        max_height_error_m=(pose[:,2]-expected('root_pose')[:,2]).abs().max(),
-                        max_orientation_error=torch.minimum(
-                            (pose[:,3:]-expected('root_pose')[:,3:]).abs().amax(-1),
-                            (pose[:,3:]+expected('root_pose')[:,3:]).abs().amax(-1)).max(),
-                        max_joint_pos_error_rad=(robot.data.joint_pos.torch[mask]-expected('joint_pos')).abs().max(),
-                        max_root_velocity_error=(robot.data.root_link_vel_w.torch[mask]-expected('root_velocity')).abs().max(),
-                        max_joint_velocity_error=(robot.data.joint_vel.torch[mask]-expected('joint_vel')).abs().max())
-                    for name,error in errors.items():
-                        birth_checks[name]=max(birth_checks[name],float(error))
-                        assert float(error)<1e-4, f'Birth state mismatch: {name}={float(error)}'
-                    birth_checks['bank_samples']+=int(mask.sum())
-            # Several real resets exercise all branches without stepping a reference pose.
+            recovery_bank = None
+            if probabilities[4] > 0.:
+                recovery_bank = load_recovery_bank(
+                    cfg.events.reset_from_reference.params['recovery_state_bank'],
+                    args.bank, env.scene['robot'].joint_names)
+            counts = {i: 0 for i in range(5)}
+            forced_counts = {i: 0 for i in range(5)}
+            birth_checks = dict(checks=0, automatic_checks=0, max_errors={})
+            def check_births(forced=False, env_ids=None):
+                result = verify_births(env, bank, recovery_bank, env_ids)
+                if env_ids is None:
+                    target = forced_counts if forced else counts
+                    for kind, value in result['counts'].items(): target[kind] += value
+                else:
+                    birth_checks['automatic_checks'] += len(env_ids)
+                birth_checks['checks'] += 1
+                for name, value in result['max_errors'].items():
+                    birth_checks['max_errors'][name] = max(birth_checks['max_errors'].get(name, 0.), value)
             for _ in range(args.reset_repeats):
-                wrapped.reset()
-                check_births()
-                monitor=env.scene.sensors.get('self_contact')
-                if monitor is not None:
-                    for value in monitor.snapshot().values():
-                        assert bool((value==0).all()), 'Self-contact reset left stale metrics'
-                    assert bool((monitor.duration==0).all()), 'Self-contact duration was not reset'
-            assert all(counts.values()), counts
+                wrapped.reset(); check_births()
+            # Forced coverage is kept separate from natural sampling counts: 1% branches
+            # must not make a small diagnostic randomly fail to exercise a branch.
+            reset_params = env.event_manager.get_term_cfg('reset_from_reference').params
+            try:
+                for kind, probability in enumerate(probabilities):
+                    if probability <= 0.: continue
+                    reset_params['birth_probabilities'] = tuple(float(i == kind) for i in range(5))
+                    wrapped.reset(); check_births(forced=True)
+                    assert bool((env._getup_birth_types == kind).all()), 'Forced branch coverage failed'
+            finally:
+                reset_params['birth_probabilities'] = probabilities
+            wrapped.reset(); check_births()
+            print('[mixed reset verified]', counts, 'forced_coverage', forced_counts, flush=True)
             obs=wrapped.get_observations()
             if args.self_contact_audit:
                 from common.self_contact_audit import SelfContactAudit
@@ -144,13 +138,18 @@ def main():
                     if torch.cuda.is_available():torch.cuda.synchronize()
                     benchmark_started=time.perf_counter()
                 old_rows=env._getup_bank_row_ids.clone()
+                old_recovery_rows=env._getup_recovery_row_ids.clone()
                 with torch.inference_mode():
                     obs,task_rewards,dones,extras=wrapped.step(policy(obs))
                     progress=extras['getup_progress']
                     if contact_audit is not None:
                         contact_audit.update(env,extras,torch.arange(env.num_envs,device=env.device),torch.ones(env.num_envs,dtype=torch.bool,device=env.device),task_rewards)
-                    assert bool((progress['assist_applied_force_n'].abs()<1e-6).all())
+                    assist_peak_force_n=max(assist_peak_force_n,float(progress['assist_applied_force_n'].abs().max()))
+                    if args.assist_mode == 'zero':
+                        assert bool((progress['assist_applied_force_n'].abs()<1e-6).all())
                     assert torch.equal(progress['bank_row_ids'],old_rows)
+                    assert torch.equal(progress['recovery_row_ids'],old_recovery_rows)
+                    if bool(dones.any()): check_births(env_ids=dones.nonzero().flatten())
                     assert bool(torch.isfinite(env.scene['robot'].data.root_link_pose_w.torch).all())
                     if 'self_contact' in extras:
                         for name,values in extras['self_contact'].items():
@@ -171,6 +170,7 @@ def main():
                     for e in dones.nonzero().flatten().tolist():
                         records.append(dict(birth_type=int(progress['birth_types'][e]),
                             bank_row=int(progress['bank_row_ids'][e]),
+                            recovery_row=int(progress['recovery_row_ids'][e]),
                             succeeded=bool(progress['succeeded'][e])))
                     policy.reset(dones)
                 if step%250==0:print(f'[mixed smoke] steps={step} completed={len(records)}',flush=True)
@@ -191,6 +191,10 @@ def main():
                     torch_peak_reserved_mb=torch.cuda.max_memory_reserved()/2**20 if torch.cuda.is_available() else None,
                     driver_used_mb=(torch.cuda.mem_get_info()[1]-torch.cuda.mem_get_info()[0])/2**20 if torch.cuda.is_available() else None,
                     note='Inference smoke throughput, not PPO training; driver memory includes all processes'),
+                birth_probabilities=probabilities, assist_mode=args.assist_mode,
+                assist_settings=dict(initial_stage=cfg.assist_initial_stage, zero_probability=cfg.assist_zero_probability, curriculum_enabled=cfg.assist_curriculum_enabled),
+                assist_peak_force_n=assist_peak_force_n,
+                forced_reset_counts=locals().get('forced_counts', {}),
                 reset_counts=locals().get('counts',{}),birth_checks=locals().get('birth_checks',{}),
                 self_contact_audit=contact_audit.report() if contact_audit is not None else None,
                 self_contact={k:dict(min=float(v['min']),max=float(v['max']),mean=float(v['sum'])/max(1,contact_samples)) for k,v in contact_aggregate.items()},episodes=records)

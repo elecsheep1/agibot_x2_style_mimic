@@ -119,10 +119,10 @@ def reset_from_bank_for_eval(
     env, env_ids, bank_path, bank_split, bank_source, manifest_file, policy_joint_names,
     start_phase=0.0, end_phase=0.0, use_reference_velocity=False,
     zero_initial_frame_velocity=False, height_offset=0.01,
-    initial_frame_probability=0.5, transition_frame_ranges=None,
-    perturb_initial_probability=0.0, perturb_state_bank=None, bank_rows=None, bank_center_xy=False,
+    transition_frame_ranges=None, perturb_state_bank=None, recovery_state_bank=None,
+    birth_probabilities=None, bank_rows=None, bank_center_xy=False,
 ):
-    """Independent evaluation reset. Never calls the user's unfinished bank loader."""
+    """Fixed bank evaluation, independent of mixed training birth probabilities."""
     import torch
     from x2_style_mimic.tasks.manager_based.x2_style_mimic.mdp.getup import (
         reset_from_motion_dataset, _write_reference_state,
@@ -133,8 +133,8 @@ def reset_from_bank_for_eval(
     # Initialize reference metadata needed by GetUpAssist without bank augmentation.
     reference_params = dict(manifest_file=manifest_file,policy_joint_names=policy_joint_names,
         use_reference_velocity=use_reference_velocity,zero_initial_frame_velocity=zero_initial_frame_velocity,
-        height_offset=height_offset,initial_frame_probability=initial_frame_probability,
-        perturb_initial_probability=0.,perturb_state_bank=None,
+        height_offset=height_offset, birth_probabilities=(1., 0., 0., 0., 0.),
+        perturb_state_bank=None, recovery_state_bank=None,
         transition_frame_ranges=None,start_phase=0.,end_phase=0.)
     reset_from_motion_dataset(env, ids, **reference_params)
     if not hasattr(env, '_fallen_eval_bank'):

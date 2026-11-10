@@ -42,6 +42,8 @@ class MultiMotionAMPAlgorithmCfg(RslRlPpoAlgorithmCfg):
         "buffer_capacity": 100_000,
         "updates_per_iteration": 20,
         "batch_size": 4096,
+        # 按本轮实际入池比例缩减判别器更新次数。
+        "dynamic_updates_enabled": True,
     }
 
 

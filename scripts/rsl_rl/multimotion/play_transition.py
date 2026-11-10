@@ -171,13 +171,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             transition_frame_ranges=None,
             start_phase=0.0,
             end_phase=0.0,
-            perturb_initial_probability=0.0,
+            birth_probabilities=(1.0, 0.0, 0.0, 0.0, 0.0),
             perturb_state_bank=None,
+            recovery_state_bank=None,
         )
         if args_cli.birth_frames is None:
             print("[验收出生] 所有动作从第0帧开始，训练混合出生已关闭。", flush=True)
         else:
-            reset_params["initial_frame_probability"] = 0.0
+            reset_params["birth_probabilities"] = (0.0, 0.0, 1.0, 0.0, 0.0)
             reset_params["transition_frame_ranges"] = tuple((f, f) for f in args_cli.birth_frames)
             print(f"[参考帧对照] 出生帧={args_cli.birth_frames}；不代表第0帧完整起身验收。", flush=True)
 

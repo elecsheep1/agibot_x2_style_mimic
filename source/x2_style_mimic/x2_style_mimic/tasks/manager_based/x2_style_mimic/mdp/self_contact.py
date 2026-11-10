@@ -6,6 +6,10 @@ import torch
 import warp as wp
 
 from isaaclab.sensors import SensorBase
+from .rewards import (
+    self_contact_pressure_cost,
+    self_contact_control_cost,
+)
 
 
 class SelfContactSensor(SensorBase):
@@ -28,12 +32,36 @@ class SelfContactSensor(SensorBase):
             or not math.isfinite(c.duration_start)
             or c.force_threshold < 0.0
             or c.duration_start < 0.0
-            or not isinstance(c.history_length, int)
-            or isinstance(c.history_length, bool)
-            or c.history_length < 1
             or c.update_period != 0.0
         ):
             raise ValueError("自接触参数无效，update_period 必须为 0")
+
+        pressure_values = (
+            c.pressure_force_threshold,
+            c.pressure_release_threshold,
+            c.pressure_release_rate,
+            c.pressure_force_scale,
+            c.pressure_grace_seconds,
+            c.pressure_ramp_seconds,
+            c.impact_force_threshold,
+            c.impact_force_scale,
+            c.impact_weight,
+        )
+        if (
+            not all(math.isfinite(value) for value in pressure_values)
+            or not (
+                0.0 <= c.pressure_release_threshold
+                < c.pressure_force_threshold
+            )
+            or c.pressure_release_rate <= 0.0
+            or c.pressure_force_scale <= 0.0
+            or c.pressure_grace_seconds < 0.0
+            or c.pressure_ramp_seconds <= 0.0
+            or c.impact_force_threshold < c.pressure_force_threshold
+            or c.impact_force_scale <= 0.0
+            or c.impact_weight < 0.0
+        ):
+            raise ValueError("自接触奖励参数无效")
         # 从实际 stage 中解析 env_0 的刚体路径。
         root_path = c.prim_path.replace("{ENV_REGEX_NS}", "/World/envs/env_0")
         root_path = root_path.replace("env_.*", "env_0")
@@ -128,6 +156,15 @@ class SelfContactSensor(SensorBase):
                 shape, device=self.device
             )
             self.peak_force = torch.zeros_like(self.duration)
+            self.strong_duration = torch.zeros_like(self.duration)
+            # strong_duration 表示可缓慢释放的接触记忆，
+            # 不再表示严格连续的强接触时长。
+            self._strong_active = torch.zeros_like(
+                self.duration, dtype=torch.bool
+            )
+            self.pressure_cost_sum = torch.zeros(
+                self._num_envs, device=self.device
+            )
 
             self._persistent = torch.zeros(
                 shape,
@@ -136,11 +173,6 @@ class SelfContactSensor(SensorBase):
             )
             self._max_duration = torch.zeros(
                 self._num_envs, device=self.device
-            )
-            # 每个物理采样保存所有自身配对的最大力模长。
-            # 先取最大值再阈值判定，等价于逐配对判定后 any。
-            self.force_history = torch.zeros(
-                (self._num_envs, c.history_length), device=self.device
             )
             self._updates = torch.zeros(
                 self._num_envs,
@@ -166,8 +198,9 @@ class SelfContactSensor(SensorBase):
         self._persistent.zero_()
         self._max_duration.zero_()
         self._updates.zero_()
+        self.pressure_cost_sum.zero_()
 
-        # duration 和最近物理采样历史跨控制周期保留。
+        # 两种接触计时均跨控制周期保留。
         self._window_open = True
 
     def end_control_window(self):
@@ -236,8 +269,61 @@ class SelfContactSensor(SensorBase):
                 )
 
         mask = wp.to_torch(env_mask).bool()
+        pair_mask = mask[:, None]
+        c = self.cfg
 
-        active = pair_force > self.cfg.force_threshold
+        # 滞回：超过上阈值开启，低于下阈值关闭，
+        # 中间区域保留上一物理子步的状态。
+        next_active = torch.where(
+            pair_force > c.pressure_force_threshold,
+            torch.ones_like(self._strong_active),
+            torch.where(
+                pair_force < c.pressure_release_threshold,
+                torch.zeros_like(self._strong_active),
+                self._strong_active,
+            ),
+        )
+        self._strong_active.copy_(
+            torch.where(
+                pair_mask, next_active, self._strong_active
+            )
+        )
+
+        # 接触记忆：开启时累积，关闭后缓慢减少。
+        memory_cap = (
+            c.pressure_grace_seconds
+            + c.pressure_ramp_seconds
+        )
+        next_memory = torch.where(
+            self._strong_active,
+            self.strong_duration + self._sim_physics_dt,
+            (
+                self.strong_duration
+                - c.pressure_release_rate * self._sim_physics_dt
+            ).clamp_min(0.0),
+        ).clamp_max(memory_cap)
+
+        self.strong_duration.copy_(
+            torch.where(
+                pair_mask, next_memory, self.strong_duration
+            )
+        )
+
+        cost = self_contact_pressure_cost(
+            pair_force=pair_force,
+            strong_duration=self.strong_duration,
+            force_threshold=c.pressure_force_threshold,
+            force_scale=c.pressure_force_scale,
+            grace_seconds=c.pressure_grace_seconds,
+            ramp_seconds=c.pressure_ramp_seconds,
+        )
+        self.pressure_cost_sum.add_(
+            torch.where(mask, cost, torch.zeros_like(cost))
+        )
+
+        # 下方原有的低阈值诊断仍然按 10 N 统计，
+        # 与上面的奖励计时分开。
+        active = pair_force > c.force_threshold
 
         duration = torch.where(
             active,
@@ -275,18 +361,9 @@ class SelfContactSensor(SensorBase):
             )
         )
 
-        history = torch.cat(
-            (pair_force.amax(dim=-1, keepdim=True), self.force_history[:, :-1]),
-            dim=-1,
-        )
-        self.force_history.copy_(
-            torch.where(mask[:, None], history, self.force_history)
-        )
         self._updates.add_(mask.long())
 
     def snapshot(self, env_ids=None):
-        from .rewards import self_contact_history_count
-
         ids = slice(None) if env_ids is None else env_ids
 
         metrics = {
@@ -300,9 +377,10 @@ class SelfContactSensor(SensorBase):
                 self._persistent.sum(dim=-1).float()
             ),
             "max_duration_s": self._max_duration,
-            # 与奖励共用公式；范围 [0, history_length]。
-            "penalty_raw": self_contact_history_count(
-                self.force_history, self.cfg.force_threshold
+            # 与当前实际奖励一致。
+            "penalty_raw": self_contact_control_cost(self),
+            "strong_contact_memory_s": (
+                self.strong_duration.amax(dim=-1)
             ),
             "updates_per_control_step": (
                 self._updates.float()
@@ -330,8 +408,10 @@ class SelfContactSensor(SensorBase):
             self.peak_force,
             self._persistent,
             self._max_duration,
-            self.force_history,
             self._updates,
+            self.strong_duration,
+            self._strong_active,
+            self.pressure_cost_sum,
         ):
             buffer[ids] = 0
 

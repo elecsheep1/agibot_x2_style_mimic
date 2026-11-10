@@ -44,9 +44,12 @@ class AMPWindowPPO(PPO):
         self.amp_cfg = deepcopy(amp_cfg)
         self.amp_cfg.setdefault("reward_gate_enabled", False)
         self.amp_cfg.setdefault("policy_sample_gate_enabled", False)
+        # 未指定的新旧入口继续使用固定次数，避免隐式改变旧实验。
+        self.amp_cfg.setdefault("dynamic_updates_enabled", False)
         for key in (
             "reward_gate_enabled",
             "policy_sample_gate_enabled",
+            "dynamic_updates_enabled",
         ):
             if not isinstance(self.amp_cfg[key], bool):
                 raise ValueError(f"AMP 配置 {key} 必须为布尔值")
@@ -105,6 +108,9 @@ class AMPWindowPPO(PPO):
         self._amp_getup_scores = []         # 记录符合条件的判别器分数
         self._amp_getup_rewards = []        # 记录符合条件的原始风格奖励
         self._amp_diag_valid_count = 0      # 记录符合条件的 AMP 窗口数量，用于计算 getup_window_fraction
+        self._amp_new_window_count = 0      # 本轮真正通过采样门控、提交给回放池的新窗口数量。
+        self._amp_window_opportunities = 0  # 本轮全部环境步数量，用于计算新窗口入池比例。
+        self._amp_update_credit = 0.0       # 不足一次更新的小数余额，跨 PPO 轮次保留。
 
     def act(self, obs):
         """内部保存 AMP 状态，外部返回 PPO 动作。"""
@@ -214,7 +220,11 @@ class AMPWindowPPO(PPO):
                     self._amp_getup_scores.append(scores[getup_mask].detach().float().clone())
                     self._amp_getup_rewards.append(rewards_raw[getup_mask].detach().float().clone())
         gated_style = raw_style * reward_gate
-        # 缓冲区只保存完整、未跨回合的窗口。
+        # 只统计真正通过完整窗口检查和采样门控的样本。
+        # 不使用奖励门控均值，也不使用当前回放池大小估算。
+        self._amp_new_window_count += int(buffer_mask.sum().item())
+        self._amp_window_opportunities += int(buffer_mask.numel())
+        # 缓冲区只保存完整、未跨回合且通过采样门控的窗口。
         self.amp_buffer.add(windows, buffer_mask)
         # --------------------------------------------------
         # 4. 记录统计，并给 PPO 加入风格奖励。
@@ -244,10 +254,40 @@ class AMPWindowPPO(PPO):
         # Actor/Critic 使用采集时已经混合好的奖励。
         metrics = super().update()      # 调用父类 PPO 更新 Actor/Critic，取得其返回的训练指标字典。
 
-        updates = int(self.amp_cfg["updates_per_iteration"])   # 读取每轮判别器更新次数
+        max_updates = int(self.amp_cfg["updates_per_iteration"])
         batch_size = int(self.amp_cfg["batch_size"])
-        if updates <=0 or batch_size <= 0:
+        if max_updates <= 0 or batch_size <= 0:
             raise ValueError("AMP 更新次数或批量大小无效")
+
+        new_windows = self._amp_new_window_count
+        opportunities = self._amp_window_opportunities
+
+        if not 0 <= new_windows <= opportunities:
+            raise RuntimeError("AMP 新入池窗口计数异常")
+
+        if self.amp_cfg["dynamic_updates_enabled"]:
+            # 全部窗口入池时保持原来的更新强度：
+            # 100% -> 20 次，50% -> 10 次，10% -> 平均 2 次。
+            target_updates = (
+                max_updates * new_windows / max(opportunities, 1)
+            )
+            updates = 0
+
+            # 没有新样本时不更新，也不消耗或增加小数余额。
+            if new_windows > 0 and self.amp_buffer.size > 0:
+                budget = self._amp_update_credit + target_updates
+
+                # 小数部分留到下一轮，避免每轮取整造成长期偏少。
+                # 微小容差用于处理浮点数接近整数时的舍入误差。
+                updates = min(max_updates, int(budget + 1e-9))
+                self._amp_update_credit = max(
+                    0.0, budget - updates
+                )
+        else:
+            # 保留固定次数模式，便于与原实验对照。
+            target_updates = float(max_updates)
+            updates = max_updates
+            self._amp_update_credit = 0.0
 
         totals = {}
         completed_updates = 0
@@ -295,6 +335,21 @@ class AMPWindowPPO(PPO):
         metrics["amp/valid_window_ratio"] = self._amp_valid_sum / count
         metrics["amp/buffer_size"] = float(self.amp_buffer.size)
         metrics["amp/discriminator_updates"] = float(completed_updates)
+        metrics["amp/new_window_count"] = float(new_windows)
+        metrics["amp/window_opportunities"] = float(opportunities)
+        # 本轮目标次数可以是小数，实际次数是整数。
+        metrics["amp/discriminator_target_updates"] = float(target_updates)
+        metrics["amp/discriminator_update_credit"] = float(self._amp_update_credit)
+        # 只计算策略侧抽样量；参考侧使用同样的 batch_size。
+        policy_sample_draws = completed_updates * batch_size
+        metrics["amp/policy_sample_draws"] = float(policy_sample_draws)
+        # 表示抽样量与新窗口数量之比，并非每条样本实际被抽取次数。
+        # 无新窗口时该比例无定义，用 NaN 标记。
+        metrics["amp/sample_draws_per_new_window"] = (
+            policy_sample_draws / new_windows
+            if new_windows > 0
+            else float("nan")
+        )
         if self._amp_getup_scores:
             scores = torch.cat(self._amp_getup_scores)
             rewards_raw = torch.cat(self._amp_getup_rewards)
@@ -334,6 +389,12 @@ class AMPWindowPPO(PPO):
         self._amp_getup_scores.clear()
         self._amp_getup_rewards.clear()
         self._amp_diag_valid_count = 0
+
+        # 下一轮重新统计新样本量。
+        self._amp_new_window_count = 0
+        self._amp_window_opportunities = 0
+
+        # 不清零 _amp_update_credit，保留不足一次更新的余额。
 
         # 不清空历史：同一回合允许跨 PPO 迭代继续积累。
         return metrics
@@ -392,10 +453,11 @@ class AMPWindowPPO(PPO):
             # 仅允许改变风格奖励权重，其余 AMP 设置仍严格检查。
             saved_settings = deepcopy(amp["settings"])
             current_settings = deepcopy(self.amp_cfg)
-            # 旧 checkpoint 没有门控字段，按关闭处理。
             gate_defaults = {
                 "reward_gate_enabled": False,
                 "policy_sample_gate_enabled": False,
+                # 旧检查点使用固定更新次数。
+                "dynamic_updates_enabled": False,
             }
             for key, default in gate_defaults.items():
                 saved_settings.setdefault(key, default)
@@ -407,6 +469,7 @@ class AMPWindowPPO(PPO):
                 "style_reward_weight",
                 "reward_gate_enabled",
                 "policy_sample_gate_enabled",
+                "dynamic_updates_enabled",
                 "weight_decay",
             )
             changes = []
@@ -499,5 +562,9 @@ class AMPWindowPPO(PPO):
         self._amp_getup_scores.clear()
         self._amp_getup_rewards.clear()
         self._amp_diag_valid_count = 0
+        # 加载时回放池和采集历史都会清空，调度计数也重新开始。
+        self._amp_new_window_count = 0
+        self._amp_window_opportunities = 0
+        self._amp_update_credit = 0.0
 
         return load_iteration

@@ -1,0 +1,16 @@
+{
+  "scanned": 1024,
+  "target_parents": 1024,
+  "trigger_families": 21,
+  "candidates": 45,
+  "accepted": 43,
+  "accepted_families": 20,
+  "rejected": {
+    "insufficient_history": 14,
+    "invalid_candidate": 7,
+    "replay_invalid": 2
+  },
+  "zero_assist_verified": true,
+  "holdout_unchanged": true,
+  "ready_for_source_integration": false
+}

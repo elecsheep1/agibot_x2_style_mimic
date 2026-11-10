@@ -96,6 +96,7 @@ class X2MultiMotionGetUpEnv(X2AMPGetUpEnv):
         )
         birth_types = self._getup_birth_types.clone()
         bank_row_ids = self._getup_bank_row_ids.clone()
+        recovery_row_ids = self._getup_recovery_row_ids.clone()
 
         monitor = self.scene.sensors["self_contact"]
         if self._physics_handles_decimation:
@@ -153,6 +154,7 @@ class X2MultiMotionGetUpEnv(X2AMPGetUpEnv):
         extras["getup_progress"]["motion_ids"] = motion_ids
         extras["getup_progress"]["birth_types"] = birth_types
         extras["getup_progress"]["bank_row_ids"] = bank_row_ids
+        extras["getup_progress"]["recovery_row_ids"] = recovery_row_ids
 
         # 使用终止判断阶段保存的真实步后快照。
         # 即使本步自动重置，也不会读到下一回合的稳定时长。
@@ -221,6 +223,9 @@ class X2MultiMotionGetUpEnv(X2AMPGetUpEnv):
             )
             episode_stats["bank_row_ids"] = (
                 self._getup_bank_row_ids[env_ids].clone()
+            )
+            episode_stats["recovery_row_ids"] = (
+                self._getup_recovery_row_ids[env_ids].clone()
             )
 
         if episode_stats is not None:
@@ -296,6 +301,7 @@ class X2MultiMotionGetUpEnv(X2AMPGetUpEnv):
             "perturbed_initial",
             "reference_rsi",
             "simulated_fall",
+            "pre_entrapment",
         )
         for birth_id, birth_name in enumerate(birth_names):
             selected = episode_stats["birth_types"] == birth_id
@@ -320,6 +326,28 @@ class X2MultiMotionGetUpEnv(X2AMPGetUpEnv):
             log[f"{prefix}/final_hold_seconds"] = (
                 final_hold[selected].mean().item()
             )
+
+        if "assist_episode_force_n" in episode_stats:
+            dynamic = episode_stats["birth_types"] == 4
+            force_cap = episode_stats["assist_episode_force_n"]
+
+            for label, selected in (
+                ("zero_assist", dynamic & (force_cap == 0.0)),
+                ("assist_enabled", dynamic & (force_cap > 0.0)),
+            ):
+                if not bool(selected.any()):
+                    continue
+
+                prefix = f"GetUp/pre_entrapment/{label}"
+                log[f"{prefix}/success_rate"] = (
+                    succeeded[selected].float().mean().item()
+                )
+                log[f"{prefix}/stable_at_end_rate"] = (
+                    (final_hold[selected] + 1e-6 >= required_hold)
+                    .float()
+                    .mean()
+                    .item()
+                )
 
         # 只对成功回合计算首次成功时间。
         # 本批没有成功回合时不写该指标。

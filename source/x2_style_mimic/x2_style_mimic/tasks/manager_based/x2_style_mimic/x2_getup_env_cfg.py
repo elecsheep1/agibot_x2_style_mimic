@@ -173,9 +173,10 @@ class GetUpEventsCfg:
             "use_reference_velocity": True,
             "zero_initial_frame_velocity": True,
             "height_offset": 0.01,
-            "initial_frame_probability": 0.5,
-            "perturb_initial_probability": 0.4,
             "perturb_state_bank": str(PROJECT_DIR / "data/fallen_states/x2_fallen_v2_hipfiltered/bank.npz"),
+            "recovery_state_bank": str(PROJECT_DIR / "data/fallen_states/x2_pre_entrapment_v1/train_validated.npz"),
+            # 首帧、近邻、RSI、仿真摔倒、动态恢复。
+            "birth_probabilities": (0.30, 0.10, 0.50, 0.09, 0.01),
             "transition_frame_ranges": (
                 (0, 543),  # x2_getup_139_16_umr_v1_50hz.npz
                 (0, 598),  # x2_getup_139_17_umr_v1_50hz.npz

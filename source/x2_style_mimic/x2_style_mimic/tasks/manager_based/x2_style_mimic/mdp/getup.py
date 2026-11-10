@@ -9,7 +9,7 @@ import torch
 from isaaclab.managers import ManagerTermBase, SceneEntityCfg
 
 from .motion_dataset import MotionDataset
-from .getup_births import FallenStateBank
+from .getup_births import FallenStateBank, RecoveryStateBank
 from x2_style_mimic.assets.x2_ultra_cfg import X2_ULTRA_USD
 
 if TYPE_CHECKING:
@@ -119,18 +119,37 @@ def reset_from_motion_dataset(
     zero_initial_frame_velocity=False,      # 是否将初始帧的速度置零
     height_offset=0.01,                     # 高度偏移
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-    initial_frame_probability=0.5,
     transition_frame_ranges=None,
-    perturb_initial_probability=0.0,        # 初始状态扰动概率
     perturb_state_bank=None,                # 初始状态扰动库
+    recovery_state_bank=None,               # 摔倒分支内部的替换状态库
+    # 顺序：首帧、近邻、RSI、仿真摔倒、动态恢复。
+    birth_probabilities=(1.0, 0.0, 0.0, 0.0, 0.0),
 ):
     """按权重选择动作；默认从首帧、零速度出生。"""
+    probabilities = torch.as_tensor(
+        birth_probabilities,
+        dtype=torch.float64,
+        device=env.device,
+    )
+
+    if (
+        probabilities.shape != (5,)
+        or not bool(torch.isfinite(probabilities).all())
+        or bool((probabilities < 0.0).any())
+        or not bool(torch.isclose(
+            probabilities.sum(),
+            probabilities.new_tensor(1.0),
+            atol=1e-6,
+            rtol=0.0,
+        ))
+    ):
+        raise ValueError("出生概率必须为5个非负有限数，且总和为1")
+    if (bool((probabilities[[1, 3, 4]] > 0.0).any()) and perturb_state_bank is None):
+        raise ValueError("状态库出生需要提供 perturb_state_bank")
+    if probabilities[4].item() > 0.0 and recovery_state_bank is None:
+        raise ValueError("动态恢复出生需要提供 recovery_state_bank")
     if not math.isfinite(height_offset) or height_offset < 0.0:
         raise ValueError("height_offset 必须为非负有限数")
-    if not (math.isfinite(perturb_initial_probability) and 0.0 <= perturb_initial_probability <= 1.0):
-        raise ValueError("perturb_initial_probability 必须是 [0, 1] 内的有限数")
-    if perturb_initial_probability > 0.0 and perturb_state_bank is None:
-        raise ValueError("启用扰动出生前必须提供已验证的扰动状态库")
 
     robot = env.scene[asset_cfg.name]
 
@@ -169,31 +188,58 @@ def reset_from_motion_dataset(
     else:
         dataset = cache[1]          # 如果缓存存在且键匹配，则直接使用缓存中的数据集对象
 
+    # 按 birth_probabilities 为每个待重置环境采样一种“出生方式”。
+    # probabilities 的长度为 5，索引含义与函数注释中的顺序一致：
+    #   0：参考动作首帧；
+    #   1：近邻状态；
+    #   2：RSI（Reference State Initialization，随机参考状态初始化）；
+    #   3：仿真摔倒状态；
+    #   4：动态恢复状态。
+    # replacement=True 表示不同环境之间可以采样到相同的出生类别。
+    birth_types = torch.multinomial(
+        probabilities,
+        num_samples=len(env_ids),
+        replacement=True,
+    )
+
+    # 先为所有环境采样参考动作的首帧状态，作为默认初始状态。
     state = dataset.sample_reset_states(
         len(env_ids),
-        start_phase,
-        end_phase,
-        initial_frame_probability=initial_frame_probability,
-        transition_frame_ranges=transition_frame_ranges,
+        start_phase=0.0,
+        end_phase=0.0,
+        transition_frame_ranges=None,
     )
-    initial = state["initial_branch"]
-    perturbed = torch.zeros_like(initial)
-    if perturb_initial_probability > 0.0:
-        perturbed = initial & (
-            torch.rand(len(env_ids), device=env.device)
-            < perturb_initial_probability
+
+    # 找出采用 RSI 初始化的环境。RSI 环境不使用统一的首帧状态，而是从
+    # 指定的参考动作时间区间中随机采样一个状态，增加训练初始状态的多样性。
+    rsi = birth_types == 2
+    if bool(rsi.any()):
+        # 只为 RSI 环境采样所需数量的状态，避免为其他环境重复采样。
+        # initial_frame_probability=0.0 表示不额外偏向动作首帧；
+        # transition_frame_ranges 用于限制可采样的过渡帧范围。
+        rsi_state = dataset.sample_reset_states(
+            int(rsi.sum().item()),
+            start_phase=start_phase,
+            end_phase=end_phase,
+            initial_frame_probability=0.0,
+            transition_frame_ranges=transition_frame_ranges,
         )
-    # 0：原始首帧。
-    # 1：扰动首帧。
-    # 2：参考过渡帧。
-    birth_types = torch.full(
-        (len(env_ids),),
-        2,
-        dtype=torch.long,
-        device=env.device,
+
+        # state 的每个字段都形如 [len(env_ids), ...]。
+        # rsi 布尔掩码选出所有 RSI 环境，并用新采样的 RSI 状态替换它们；
+        for name in state:
+            state[name][rsi] = rsi_state[name]
+
+    # 保留旧变量名，供后面的高度偏移、姿态扰动和关节限位处理使用。
+    # 这里 birth_types==1、3、4 的环境都被归为“需要扰动/特殊处理”的环境：
+    #   1：近邻状态；
+    #   3：仿真摔倒状态；
+    #   4：动态恢复状态。
+    perturbed = (
+        (birth_types == 1)
+        | (birth_types == 3)
+        | (birth_types == 4)
     )
-    birth_types[initial] = 0
-    birth_types[perturbed] = 1
 
     root_pose = state["root_pose"].clone()
     root_velocity = state["root_velocity"].clone()
@@ -203,6 +249,7 @@ def reset_from_motion_dataset(
     motion_ids = state["motion_ids"].clone()
     frame_ids = state["frame_ids"].clone()
     bank_row_ids = torch.full_like(motion_ids, -1)
+    recovery_row_ids = torch.full_like(motion_ids, -1)
 
     # 先处理参考状态速度。
     if not use_reference_velocity:
@@ -234,29 +281,70 @@ def reset_from_motion_dataset(
         else:
             bank = cache[1]
 
-        # 库分支内部：近邻和仿真摔倒各 50%。
-        source_types = torch.randint(
-            0, 2,
-            (int(perturbed.sum().item()),),
-            device=env.device,
-        )
-        sampled = bank.sample(
-            motion_ids[perturbed], source_types
-        )
+        static_bank = (birth_types == 1) | (birth_types == 3)
+        if bool(static_bank.any()):
+            source_types = (birth_types[static_bank] == 3).long()
+            sampled = bank.sample(
+                motion_ids[static_bank],
+                source_types,
+            )
 
-        root_pose[perturbed] = sampled["root_pose"]
-        root_velocity[perturbed] = sampled["root_velocity"]
-        joint_pos[perturbed] = sampled["joint_pos"]
-        joint_vel[perturbed] = sampled["joint_vel"]
-        # 采集时的水平位移不作为出生位置。
-        # 保留根高度、朝向、关节姿态和全部速度。
-        root_pose[perturbed, :2] = 0.0
-        birth_types[perturbed] = torch.where(
-            source_types == 0, 1, 3
+            root_pose[static_bank] = sampled["root_pose"]
+            root_velocity[static_bank] = sampled["root_velocity"]
+            joint_pos[static_bank] = sampled["joint_pos"]
+            joint_vel[static_bank] = sampled["joint_vel"]
+            # 清除采集时的水平位置
+            root_pose[static_bank, :2] = 0.0
+            # 更新动作 ID
+            motion_ids[static_bank] = sampled["motion_id"]
+            # 表示当前状态不是普通参考动作数据集中的有效帧。
+            frame_ids[static_bank] = -1
+            # 保存状态库行号
+            bank_row_ids[static_bank] = sampled["bank_row"]
+
+    recovery = birth_types == 4
+    if bool(recovery.any()):
+        # recovery 来自原仿真摔倒分支，所以此时 bank 已加载。
+        recovery_key = (
+            str(Path(recovery_state_bank).resolve()),
+            str(Path(perturb_state_bank).resolve()),
+            bank_key,
         )
-        motion_ids[perturbed] = sampled["motion_id"]
-        frame_ids[perturbed] = -1
-        bank_row_ids[perturbed] = sampled["bank_row"]
+        recovery_cache = getattr(env, "_getup_recovery_bank_cache", None)
+
+        if (
+            recovery_cache is None
+            or recovery_cache[0] != recovery_key
+        ):
+            recovery_bank = RecoveryStateBank(
+                path=recovery_state_bank,
+                parent_path=perturb_state_bank,
+                parent_bank=bank,
+            )
+            env._getup_recovery_bank_cache = (
+                recovery_key,
+                recovery_bank,
+            )
+        else:
+            recovery_bank = recovery_cache[1]
+
+        sampled_recovery = recovery_bank.sample(int(recovery.sum().item()))
+
+        root_pose[recovery] = sampled_recovery["root_pose"]
+        root_velocity[recovery] = sampled_recovery["root_velocity"]
+        joint_pos[recovery] = sampled_recovery["joint_pos"]
+        joint_vel[recovery] = sampled_recovery["joint_vel"]
+
+        # 平地上移除采集时的水平位移，保留朝向和全部速度。
+        root_pose[recovery, :2] = 0.0
+        birth_types[recovery] = 4
+        motion_ids[recovery] = -1
+        frame_ids[recovery] = -1
+        # 两个库的行号不能混用。
+        bank_row_ids[recovery] = -1
+        recovery_row_ids[recovery] = (
+            sampled_recovery["recovery_row"]
+        )
 
     # 库中姿态已经落定，不再次加高。
     root_pose[~perturbed, 2] += height_offset
@@ -282,9 +370,21 @@ def reset_from_motion_dataset(
     )
 
     velocity_limits = robot.data.joint_vel_limits.torch[env_ids]
-    joint_vel = joint_vel.clamp(
+    clipped_velocity = joint_vel.clamp(
         min=-velocity_limits,
         max=velocity_limits,
+    )
+
+    velocity_error = (clipped_velocity - joint_vel).abs().amax(dim=-1)
+
+    if bool((recovery & (velocity_error > 1e-4)).any()):
+        raise ValueError("动态恢复状态关节速度超限，需要重新验证")
+
+    # 动态状态保持真实速度，不静默改变采集状态。
+    joint_vel = torch.where(
+        recovery[:, None],
+        joint_vel,
+        clipped_velocity,
     )
 
     # 保存每个环境的出生动作、帧号和裁剪数量。
@@ -294,6 +394,7 @@ def reset_from_motion_dataset(
         "_getup_reference_joint_clamp_counts",
         "_getup_birth_types",
         "_getup_bank_row_ids",
+        "_getup_recovery_row_ids",
     ):
         if not hasattr(env, name):
             setattr(
@@ -313,6 +414,7 @@ def reset_from_motion_dataset(
     env._getup_reference_motion_paths = [str(path) for path in dataset.paths]
     env._getup_birth_types[env_ids] = birth_types
     env._getup_bank_row_ids[env_ids] = bank_row_ids
+    env._getup_recovery_row_ids[env_ids] = recovery_row_ids
 
     _write_reference_state(
         env,
@@ -620,7 +722,6 @@ def standing_limb_quality(
         + 0.30 * placement_quality
         + 0.20 * direction_quality
     )
-
 
 
 # 终止与成功条件

@@ -72,7 +72,7 @@ def unpack_state(state, spec: StateSpec):
         spec.num_actions,
     )
 
-    values = torch.split(state, sizes, dim=-1)
+    values = torch.split(state, sizes, dim=-1)      # 拆分为各个字段
 
     return dict(zip(
         (

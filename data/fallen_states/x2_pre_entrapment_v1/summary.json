@@ -1,0 +1,14 @@
+{
+  "count": 37,
+  "families": 19,
+  "all_train": true,
+  "lead_seconds_counts": {
+    "0.0": 11,
+    "0.16": 16,
+    "0.3": 10
+  },
+  "nonzero_root_velocity_rows": 37,
+  "nonzero_joint_velocity_rows": 37,
+  "max_replay_ground_force_n": 4682.41748046875,
+  "max_replay_self_force_n": 2947.578857421875
+}

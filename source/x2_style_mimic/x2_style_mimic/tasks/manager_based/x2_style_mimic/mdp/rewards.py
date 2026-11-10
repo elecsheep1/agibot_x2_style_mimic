@@ -60,12 +60,61 @@ def self_contact_history_count(
     return (force_history > force_threshold).sum(dim=-1).float()
 
 
+# def self_contact_penalty(
+#     env: ManagerBasedRLEnv,
+#     sensor_cfg: SceneEntityCfg,
+# ) -> torch.Tensor:
+#     """历史自身接触计数，读取缓存而不推进传感器。"""
+#     sensor = env.scene.sensors[sensor_cfg.name]
+#     return self_contact_history_count(
+#         sensor.force_history, sensor.cfg.force_threshold
+#     )
+
+def self_contact_pressure_cost(
+    pair_force: torch.Tensor,           # 每个刚体配对之间的接触力大小。
+    strong_duration: torch.Tensor,
+    force_threshold: float,
+    force_scale: float,
+    grace_seconds: float,               # 允许刚体短时间接触而不受惩罚的宽限时间。
+    ramp_seconds: float,                # 超过宽限时间后，持续时间因子从 0 增加到 1 所需的时间。
+) -> torch.Tensor:
+    """每个配对的强接触力与持续时间共同决定代价。"""
+    force_factor = (
+        (pair_force - force_threshold) / force_scale
+    ).clamp(0.0, 1.0)
+
+    duration_factor = (
+        (strong_duration - grace_seconds) / ramp_seconds
+    ).clamp(0.0, 1.0)
+
+    return (force_factor * duration_factor).sum(dim=-1)
+
+
+def self_contact_control_cost(sensor) -> torch.Tensor:
+    """持续项取物理子步平均，冲击项取每个配对的周期峰值。"""
+    persistent_cost = (
+        sensor.pressure_cost_sum
+        / sensor._updates.clamp_min(1).to(
+            sensor.pressure_cost_sum.dtype
+        )
+    )
+
+    impact_cost = (
+        (
+            sensor.peak_force
+            - sensor.cfg.impact_force_threshold
+        )
+        / sensor.cfg.impact_force_scale
+    ).clamp(0.0, 1.0).square().sum(dim=-1)
+
+    return persistent_cost + sensor.cfg.impact_weight * impact_cost
+
+
 def self_contact_penalty(
     env: ManagerBasedRLEnv,
     sensor_cfg: SceneEntityCfg,
 ) -> torch.Tensor:
-    """历史自身接触计数，读取缓存而不推进传感器。"""
-    sensor = env.scene.sensors[sensor_cfg.name]
-    return self_contact_history_count(
-        sensor.force_history, sensor.cfg.force_threshold
+    """只读取缓存，不推进传感器或接触计时。"""
+    return self_contact_control_cost(
+        env.scene.sensors[sensor_cfg.name]
     )

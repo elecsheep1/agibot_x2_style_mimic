@@ -1,0 +1,14 @@
+{
+  "scanned": 32,
+  "target_parents": 32,
+  "trigger_families": 1,
+  "candidates": 3,
+  "accepted": 3,
+  "accepted_families": 1,
+  "rejected": {},
+  "zero_assist_verified": true,
+  "holdout_unchanged": true,
+  "ready_for_source_integration": false,
+  "exploratory": true,
+  "note": "Legacy geometry contact paths emitted missing contact-report warnings; use canonical-source rerun."
+}

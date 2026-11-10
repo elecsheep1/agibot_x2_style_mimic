@@ -215,20 +215,19 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             if reset_params.get("transition_frame_ranges") is None:
                 raise ValueError("Fallen-bank fine-tuning requires transition_frame_ranges")
             reset_params.update(
-                initial_frame_probability=0.5,
-                perturb_initial_probability=0.4,
                 perturb_state_bank=str(bank_path),
             )
-        if reset_params.get("perturb_initial_probability", 0.0) > 0.0:
-            env_cfg.assist_initial_stage = len(env_cfg.assist_force_levels) - 1
-            env_cfg.assist_zero_probability = 1.0
-            env_cfg.assist_curriculum_enabled = False
-            print("[状态库续训] 仅 train 分区；近邻/摔倒各占库分支50%；强制零辅助。", flush=True)
         print(
-            f"[训练出生] cfg 首帧概率={reset_params.get('initial_frame_probability', 0.5):.0%}，"
-            f"库分支条件概率={reset_params.get('perturb_initial_probability', 0.0):.0%}，"
-            f"状态库={reset_params.get('perturb_state_bank')}，"
-            f"转换区间={reset_params.get('transition_frame_ranges')}；区间为空时使用 start/end_phase。",
+            f"[训练出生] 首帧/近邻/RSI/仿真摔倒/动态恢复="
+            f"{reset_params.get('birth_probabilities')}；"
+            f"状态库={reset_params.get('perturb_state_bank')}；"
+            f"动态库={reset_params.get('recovery_state_bank')}。",
+            flush=True,
+        )
+        print(
+            f"[辅助课程] 保留环境配置：enabled={env_cfg.assist_curriculum_enabled}，"
+            f"initial_stage={env_cfg.assist_initial_stage}，"
+            f"zero_probability={env_cfg.assist_zero_probability}",
             flush=True,
         )
 

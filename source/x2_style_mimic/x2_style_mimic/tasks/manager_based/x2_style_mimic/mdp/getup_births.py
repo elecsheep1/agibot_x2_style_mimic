@@ -198,3 +198,174 @@ class FallenStateBank:
         }
         result["bank_row"] = index
         return result
+
+
+class RecoveryStateBank:
+    """独立加载动态恢复状态，不改变原落定状态库的规则。"""
+
+    def __init__(self, path, parent_path, parent_bank):
+        self.device = parent_bank.device
+        parent = parent_bank.data
+
+        with np.load(path, allow_pickle=False) as archive:
+            data = {
+                name: archive[name].copy()
+                for name in archive.files
+                if name != "metadata_json"
+            }
+            meta = json.loads(
+                str(archive["metadata_json"].item())
+            )
+
+        expected = {
+            "schema": "x2_pre_entrapment_v1",
+            "quat_order": "xyzw",
+            "root_frame": "link_origin",
+            "position_frame": "environment_local",
+            "velocity_frame": "world_axes",
+            "reset_protocol": (
+                "clear_action_and_observation_history"
+                "_after_state_write_v1"
+            ),
+        }
+        for name, value in expected.items():
+            if meta.get(name) != value:
+                raise ValueError(
+                    f"动态状态库元数据不匹配：{name}"
+                )
+
+        if meta.get("replay_validated") is not True:
+            raise ValueError("动态状态库尚未完成回放验证")
+
+        if meta.get("parent_sha256") != sha256(parent_path):
+            raise ValueError("动态状态库与当前父状态库不匹配")
+
+        # parent_bank 已经验证过当前资产和参考动作。
+        if (
+            meta.get("asset_hashes")
+            != parent["metadata"].get("asset_hashes")
+        ):
+            raise ValueError("动态状态库机器人资产不匹配")
+
+        names = data["joint_names"].tolist()
+        robot_names = parent["joint_names"].tolist()
+
+        if (
+            len(names) != len(robot_names)
+            or len(set(names)) != len(names)
+            or set(names) != set(robot_names)
+        ):
+            raise ValueError("动态状态库关节集合不匹配")
+
+        count = len(data["root_pose"])
+        if count == 0:
+            raise ValueError("动态状态库为空")
+
+        shapes = {
+            "root_pose": (count, 7),
+            "root_velocity": (count, 6),
+            "joint_pos": (count, len(names)),
+            "joint_vel": (count, len(names)),
+            "parent_row": (count,),
+            "family_id": (count,),
+            "split": (count,),
+        }
+
+        for name, shape in shapes.items():
+            value = data[name]
+            if (
+                value.shape != shape
+                or not np.isfinite(value).all()
+            ):
+                raise ValueError(
+                    f"动态状态库数组无效：{name}"
+                )
+
+        if not np.allclose(
+            np.linalg.norm(data["root_pose"][:, 3:7], axis=1),
+            1.0,
+            atol=1e-4,
+        ):
+            raise ValueError("动态状态库四元数未归一化")
+
+        for name in ("parent_row", "family_id", "split"):
+            if data[name].dtype.kind not in "iu":
+                raise ValueError(f"{name} 必须为整数")
+
+        parent_rows = data["parent_row"]
+        if (
+            (parent_rows < 0).any()
+            or (parent_rows >= len(parent["split"])).any()
+        ):
+            raise ValueError("动态状态库父行号越界")
+
+        if (
+            not (data["split"] == TRAIN).all()
+            or not (parent["split"][parent_rows] == TRAIN).all()
+        ):
+            raise ValueError("动态状态库包含 holdout 来源")
+
+        if not np.array_equal(
+            data["family_id"],
+            parent["family_id"][parent_rows],
+        ):
+            raise ValueError("动态状态库家族来源不匹配")
+
+        # 同时重排位置和速度，保持机器人关节顺序。
+        order = [names.index(name) for name in robot_names]
+        for name in ("joint_pos", "joint_vel"):
+            data[name] = data[name][:, order]
+
+        self.tensors = {
+            name: torch.as_tensor(
+                data[name],
+                dtype=torch.float32,
+                device=self.device,
+            )
+            for name in (
+                "root_pose",
+                "root_velocity",
+                "joint_pos",
+                "joint_vel",
+            )
+        }
+
+        # 先均匀抽家族，再抽该家族中的阶段。
+        # 避免保存帧数较多的家族占据更多采样概率。
+        pools = [
+            np.flatnonzero(data["family_id"] == family)
+            for family in np.unique(data["family_id"])
+        ]
+        lengths = np.asarray([len(pool) for pool in pools])
+        padded = np.zeros(
+            (len(pools), int(lengths.max())),
+            dtype=np.int64,
+        )
+        for family, pool in enumerate(pools):
+            padded[family, :len(pool)] = pool
+
+        self.family_rows = torch.as_tensor(
+            padded, dtype=torch.long, device=self.device
+        )
+        self.family_lengths = torch.as_tensor(
+            lengths, dtype=torch.long, device=self.device
+        )
+
+    def sample(self, count):
+        family = torch.randint(
+            len(self.family_lengths),
+            (count,),
+            device=self.device,
+        )
+        stage = (
+            torch.rand(count, device=self.device)
+            * self.family_lengths[family]
+        ).long()
+
+        rows = self.family_rows[family, stage]
+        result = {
+            name: value[rows].clone()
+            for name, value in self.tensors.items()
+        }
+        result["recovery_row"] = rows
+        return result
