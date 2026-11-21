@@ -3,6 +3,13 @@ import json
 import numpy as np
 import torch
 
+from x2_style_mimic.utils.rotation import (
+    normalize_quaternion as _normalize_quaternion,
+    quaternion_conjugate as _quaternion_conjugate,
+    quaternion_multiply as _quaternion_multiply,
+    inverse_rotate_vector as _inverse_rotate_vector,
+)
+
 AMP_KEY_BODY_NAMES = (
     "torso_link",
     "left_shoulder_yaw_link",
@@ -22,36 +29,31 @@ AMP_STATE_DIM = 10 + 15 * len(AMP_KEY_BODY_NAMES)
 AMP_FEATURE_VERSION = "x2_amp_relative_body_v2_175_finite_difference"
 
 def normalize_quaternion(q):
-    norm = q.norm(dim=-1, keepdim=True)
+    """保留 AMP 对无效四元数的检查。"""
+    norm = q.norm(
+        dim=-1,
+        keepdim=True,
+    )
+
     if bool((norm < 1e-8).any()):
         raise ValueError("四元数包含零向量")
-    return q / norm
+
+    return _normalize_quaternion(q)
+
 
 def quaternion_conjugate(q):
-    """计算四元数共轭。"""
-    return torch.cat((-q[..., :3], q[..., 3:4]), dim=-1)
+    return _quaternion_conjugate(q)
+
 
 def quaternion_multiply(a, b):
-    """xyzw 四元数乘法，支持广播。"""
-    av = a[..., :3]
-    bv = b[..., :3]
-    av, bv = torch.broadcast_tensors(av, bv)
-    xyz = (a[..., 3:4] * bv
-        + b[..., 3:4] * av
-        + torch.cross(av, bv, dim=-1)
-    )
-    w = (
-        a[..., 3:4] * b[..., 3:4]
-        - (av * bv).sum(dim=-1, keepdim=True)
-    )
-    return torch.cat((xyz, w), dim=-1)
+    return _quaternion_multiply(a, b)
+
 
 def inverse_rotate(quaternion, vectors):
-    """使用 xyzw 四元数，将世界向量转换到根坐标系。"""
-    xyz, vectors = torch.broadcast_tensors(quaternion[..., :3], vectors)
-    w = quaternion[..., 3:4]
-    t = 2.0 * torch.cross(xyz, vectors, dim=-1)     # 计算叉积
-    return vectors - w * t + torch.cross(xyz, t, dim=-1)
+    return _inverse_rotate_vector(
+        quaternion,
+        vectors,
+    )
 
 def relative_body_features(
     root_pos_w,             # 根刚体在世界坐标中的位置

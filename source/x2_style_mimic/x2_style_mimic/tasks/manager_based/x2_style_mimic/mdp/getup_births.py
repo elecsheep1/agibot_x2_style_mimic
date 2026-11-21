@@ -106,16 +106,29 @@ class FallenStateBank:
         if (
             not isinstance(reference_files, list)
             or not isinstance(reference_hashes, list)
-            or len(reference_files) != len(motion_paths)
-            or len(reference_hashes) != len(motion_paths)
+            or len(reference_files) == 0
+            or len(reference_files) != len(reference_hashes)
         ):
             raise ValueError("状态库参考动作元数据不完整")
-        for motion_id, path in enumerate(motion_paths):
-            path = Path(path)
+        bank_motion_count = len(reference_files)
+        if bank_motion_count > len(motion_paths):
+            raise ValueError("当前动作清单缺少状态库使用的参考动作")
+        # 状态库的 motion_id 按采集时的动作顺序保存。
+        # 允许在清单末尾追加动作，原有动作仍须保持顺序和内容一致。
+        for motion_id in range(bank_motion_count):
+            path = Path(motion_paths[motion_id])
             if path.name != Path(reference_files[motion_id]).name:
-                raise ValueError(f"动作 {motion_id} 的参考顺序或文件名与状态库不一致")
+                raise ValueError(
+                    f"动作 {motion_id} 的参考顺序或文件名与状态库不一致"
+                )
             if sha256(path) != reference_hashes[motion_id]:
-                raise ValueError(f"动作 {motion_id} 的参考文件内容与状态库不一致")
+                raise ValueError(
+                    f"动作 {motion_id} 的参考文件内容与状态库不一致"
+                )
+        # 近邻状态只能引用采集时已有的参考动作。
+        near_mask = data["source_type"] == SOURCE_NEAR
+        if (data["motion_id"][near_mask] >= bank_motion_count).any():
+            raise ValueError("近邻状态的 motion_id 超出状态库参考范围")
         self.device = torch.device(device)
         self.data = data
 
@@ -130,6 +143,17 @@ class FallenStateBank:
             self.near_rows[motion_id] = torch.as_tensor(
                 rows, device=self.device, dtype=torch.long
             )
+        # 新增参考尚未采集近邻状态时，从已有近邻训练状态中抽样。
+        # 只使用 TRAIN 分区，保持 holdout 独立。
+        self.all_near_rows = torch.as_tensor(
+            np.flatnonzero(
+                train & (data["source_type"] == SOURCE_NEAR)
+            ),
+            device=self.device,
+            dtype=torch.long,
+        )
+        if self.all_near_rows.numel() == 0:
+            raise ValueError("训练分区没有近邻倒地状态")
         self.fall_rows = torch.as_tensor(
             np.flatnonzero(train & (data["source_type"] == SOURCE_FALL)),
             device=self.device,
@@ -175,7 +199,9 @@ class FallenStateBank:
             selected = near & (motion_ids == motion_id)
             pool = self.near_rows.get(motion_id)
             if pool is None or pool.numel() == 0:
-                raise ValueError(f"动作 {motion_id} 没有近邻训练状态")
+                # 当前动作尚无近邻状态，回退到已有近邻训练池。
+                # 返回结果中的 motion_id 来自实际抽到的状态库行。
+                pool = self.all_near_rows
             draw = torch.randint(
                 pool.numel(),
                 (int(selected.sum().item()),),

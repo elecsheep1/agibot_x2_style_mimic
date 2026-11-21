@@ -480,14 +480,6 @@ def head_contact_penalty(
     # 两个头部刚体同时接触也只计一次。
     return contact.any(dim=-1).float()
 
-def out_of_bounds_failure(env):
-    """越界时触发一次；补偿奖励管理器的控制步长缩放。"""
-    # ==================== 越界失败惩罚 ====================
-    return (
-        env.termination_manager.get_term("out_of_bounds").float()
-        / env.step_dt
-    )
-
 def standing_quality(
     height,
     root_up,
@@ -547,9 +539,9 @@ def standing_quality(
     if limb_quality is None:
         limb_quality = torch.ones_like(height)
     # 手脚姿态只影响现有站立分支，不重复奖励高度或稳定性。
-    limb_factor = (
-        1.0 - limb_fraction
-        + limb_fraction * limb_quality.clamp(0.0, 1.0)
+    limb_gate = (stability_quality * feet_support).clamp(0.0, 1.0)
+    limb_factor = 1.0 - limb_fraction * limb_gate * (
+        1.0 - limb_quality.clamp(0.0, 1.0)
     )
 
     return (
@@ -635,7 +627,6 @@ def standing_quality_reward(
     )
     return standing_reward
 
-
 def standing_limb_quality(
     env: ManagerBasedRLEnv,
     joint_cfg: SceneEntityCfg,
@@ -683,9 +674,10 @@ def standing_limb_quality(
     width_error = ((delta_y - stance_width).abs() - 0.04).clamp_min(0.0)
     stagger_error = (delta_x.abs() - 0.04).clamp_min(0.0)
 
-    placement_quality = torch.exp(
-        -(width_error / 0.08).square()
-        -(stagger_error / 0.08).square()
+    placement_quality = 1.0 / (
+        1.0
+        + (width_error / 0.12).square()
+        + (stagger_error / 0.12).square()
     )
 
     # ---------- 脚尖方向 ----------
@@ -718,11 +710,75 @@ def standing_limb_quality(
     )
 
     return (
-        0.50 * arm_quality
-        + 0.30 * placement_quality
-        + 0.20 * direction_quality
+        0.40 * arm_quality
+        + 0.45 * placement_quality
+        + 0.15 * direction_quality
     )
 
+def out_of_bounds_failure(env):
+    """越界时触发一次；补偿奖励管理器的控制步长缩放。"""
+    # ==================== 越界失败惩罚 ====================
+    return (
+        env.termination_manager.get_term("out_of_bounds").float()
+        / env.step_dt
+    )
+
+# 扰动
+def perturb_standing_velocity(
+    env,
+    env_ids,
+    probability: float = 0.35,
+    min_delta_v: float = 0.15,
+    max_delta_v: float = 0.35,
+    ground_sensor_cfgs: tuple[SceneEntityCfg, SceneEntityCfg] = (),
+):
+    """只推扰已接近站稳的机器人；保留原有竖直和角速度。"""
+    robot = env.scene["robot"]
+    if env_ids is None:
+        env_ids = torch.arange(env.num_envs, device=env.device)
+
+    height = robot.data.root_pos_w.torch[env_ids, 2] - env.scene.env_origins[env_ids, 2]
+    root_up = -robot.data.projected_gravity_b.torch[env_ids, 2]
+    velocity = robot.data.root_link_vel_w.torch[env_ids]
+
+    feet_grounded = torch.stack(
+        [
+            current_ground_contact_force(env, cfg)[env_ids] > 5.0
+            for cfg in ground_sensor_cfgs
+        ],
+        dim=-1,
+    ).all(dim=-1)
+
+    eligible = (
+        (height > 0.60)
+        & (root_up > math.cos(math.radians(15.0)))
+        & (velocity[:, :2].norm(dim=-1) < 0.20)
+        & (torch.rand(len(env_ids), device=env.device) < probability)
+        & feet_grounded
+    )
+    selected = env_ids[eligible]
+    if selected.numel() == 0:
+        return
+
+    new_velocity = robot.data.root_link_vel_w.torch[selected].clone()
+    previous_velocity = new_velocity.clone()
+    angle = 2.0 * math.pi * torch.rand(len(selected), device=env.device)
+    magnitude = min_delta_v + (max_delta_v - min_delta_v) * torch.rand(
+        len(selected), device=env.device
+    )
+    new_velocity[:, 0] += magnitude * angle.cos()
+    new_velocity[:, 1] += magnitude * angle.sin()
+    robot.write_root_link_velocity_to_sim_index(
+        root_velocity=new_velocity,
+        env_ids=selected,
+    )
+    # 仅在 SuperMimic 正在采集转移时记录。
+    # 不改变普通 PPO 环境的行为。
+    if getattr(env, "_wm_capture_active", False):
+        env._wm_interval_delta_velocity[selected] += (
+            new_velocity - previous_velocity
+        )
+        env._wm_interval_push_mask[selected] = True
 
 # 终止与成功条件
 def out_of_bounds(

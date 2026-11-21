@@ -16,7 +16,7 @@ def imagined_actor_loss(
         terminal_value: imagined预计未来收益，形状为 (B)。
         gamma: 折扣因子。
     Returns:
-        imagined actor 损失，形状为 (B,)。
+        imagined actor 损失。
 
     本函数不 detach，保留通过奖励、存活权重和末端价值的梯度。
     """
@@ -43,7 +43,7 @@ def imagined_actor_loss(
         discount *= gamma
 
     # 加上末端价值
-    total_return += survival * terminal_value
+    total_return += discount * survival * terminal_value
 
     return -total_return.mean()
 

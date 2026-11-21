@@ -1,0 +1,7 @@
+{
+  "method": "XZ mirror with native-axis-derived left/right mapping",
+  "double_mirror_max_joint_error_rad": 0.0,
+  "source": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/data/motions/prone_getup2/x2_lafan_subject4_getup_1506_1554_umr_50hz.npz",
+  "source_sha256": "7499ef1405e1787316bde7523efbdcabfeae166fa0e402c68aa17b75b83d53d8",
+  "output": "/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/data/motions/prone_getup2/x2_lafan_subject4_getup_1506_1554_umr_50hz_mirror.npz"
+}

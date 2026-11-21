@@ -129,6 +129,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         # note: certain randomizations occur in the environment initialization so we set the seed here
         env_cfg.seed = agent_cfg.seed
         env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+        # Keep inference tensors on the same explicitly requested device as
+        # the environment.  Previously ``--device cpu`` changed PhysX only,
+        # while the runner still attempted to construct CUDA networks.
+        if args_cli.device is not None:
+            agent_cfg.device = args_cli.device
 
         # specify directory for logging experiments
         log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
@@ -208,7 +213,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
         if args_cli.policy_only:
             print("[纯策略回放] 不加载 AMP 判别器；仅验收策略动作与起身成功率。", flush=True)
-        runner.load(resume_path, load_cfg={
+        runner.load(resume_path, map_location=agent_cfg.device, load_cfg={
             "actor": True, "critic": True, "optimizer": False,
             "iteration": False, "rnd": False, "amp": not args_cli.policy_only,
             "assist_curriculum": False,

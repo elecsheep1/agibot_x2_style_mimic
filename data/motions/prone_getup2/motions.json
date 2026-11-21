@@ -31,6 +31,38 @@
     {
       "file": "x2_lafan_subject2_supine_roll_getup_umr_50hz_mirror.npz",
       "weight": 1.0
+    },
+    {
+      "file": "x2_lafan_subject4_getup_742_776_umr_50hz.npz",
+      "weight": 0.25
+    },
+    {
+      "file": "x2_lafan_subject4_getup_1506_1554_umr_50hz.npz",
+      "weight": 0.25
+    },
+    {
+      "file": "x2_lafan_subject4_getup_2050_2086_umr_50hz.npz",
+      "weight": 0.25
+    },
+    {
+      "file": "x2_lafan_subject3_getup_3287_3392_umr_50hz.npz",
+      "weight": 0.25
+    },
+    {
+      "file": "x2_lafan_subject4_getup_742_776_umr_50hz_mirror.npz",
+      "weight": 0.25
+    },
+    {
+      "file": "x2_lafan_subject4_getup_1506_1554_umr_50hz_mirror.npz",
+      "weight": 0.25
+    },
+    {
+      "file": "x2_lafan_subject4_getup_2050_2086_umr_50hz_mirror.npz",
+      "weight": 0.25
+    },
+    {
+      "file": "x2_lafan_subject3_getup_3287_3392_umr_50hz_mirror_repaired.npz",
+      "weight": 0.25
     }
   ]
 }

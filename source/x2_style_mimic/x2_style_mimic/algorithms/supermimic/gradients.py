@@ -4,7 +4,7 @@ from contextlib import contextmanager
 
 
 @contextmanager
-def forzen_parameters(*modules):
+def frozen_parameters(*modules):
     """冻结模块参数，同时保留输出对输入的梯度。"""
     parameters = []     # 保存所有需要冻结的参数。
     seen = set()        # 记录已经处理过的参数 ID

@@ -4,7 +4,7 @@ from isaaclab.utils.configclass import configclass
 from isaaclab_rl.rsl_rl import RslRlPpoAlgorithmCfg
 
 from .rsl_rl_ppo_cfg import PPORunnerCfg
-from ..x2_getup_env_cfg import MOTION_MANIFEST
+from ..x2_getup_env_cfg import AMP_MOTION_MANIFEST
 from ..x2_style_mimic_env_cfg import POLICY_JOINT_NAMES
 
 @configclass
@@ -15,7 +15,7 @@ class MultiMotionAMPAlgorithmCfg(RslRlPpoAlgorithmCfg):
     )
 
     amp_cfg: dict = {
-        "manifest_file": str(MOTION_MANIFEST),
+        "manifest_file": str(AMP_MOTION_MANIFEST),
 
         # 完整关节集合用于重置数据检查。
         # MotionDataset 内部按名称映射，不依赖这里的排列。

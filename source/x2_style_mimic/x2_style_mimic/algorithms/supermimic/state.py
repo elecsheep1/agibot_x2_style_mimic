@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import torch
 
 
-@dataclass(forzen=True)
+@dataclass(frozen=True)
 class StateSpec:
     """状态规范，定义了状态的形状和数据类型。"""
     num_joints: int

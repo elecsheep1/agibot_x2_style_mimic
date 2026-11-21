@@ -33,12 +33,13 @@ from .x2_style_mimic_env_cfg import (
 from .mdp.self_contact_cfg import SelfContactSensorCfg
 
 PROJECT_DIR = Path(__file__).resolve().parents[6]
+# 环境重置只使用原有 8 条参考，保持已验证的出生分布。
 MOTION_MANIFEST = (
-    PROJECT_DIR
-    / "data"
-    / "motions"
-    / "prone_getup2"
-    / "motions.json"
+    PROJECT_DIR / "data" / "motions" / "prone_getup2" / "motions_birth.json"
+)
+# AMP 使用全部参考，新增动作的采样比例由清单中的 weight 控制。
+AMP_MOTION_MANIFEST = (
+    PROJECT_DIR / "data" / "motions" / "prone_getup2" / "motions.json"
 )
 _ROBOT_PATH = "{ENV_REGEX_NS}/Robot/Geometry/base_link"
 _TORSO_PATH = _ROBOT_PATH + "/waist_yaw_link/waist_pitch_link/torso_link"
@@ -195,8 +196,8 @@ class GetUpEventsCfg:
         mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
-            "static_friction_range": (0.6, 1.0),
-            "dynamic_friction_range": (0.5, 0.9),
+            "static_friction_range": (0.5, 1.0),
+            "dynamic_friction_range": (0.4, 0.9),
             "restitution_range": (0.0, 0.05),    # 机器人碰撞材质的恢复系数
             "num_buckets": 65,                   # 预采样65组材质参数，再随机分配给碰撞形状
             "make_consistent": True,             # 保证动态摩擦系数不超过静态摩擦系数
@@ -231,6 +232,22 @@ class GetUpEventsCfg:
             "damping_distribution_params": (0.90, 1.10),     # 随机缩放阻尼。
             "operation": "scale",
             "distribution": "uniform",
+        },
+    )
+
+    standing_perturbation = EventTerm(
+        func=getup_mdp.perturb_standing_velocity,
+        mode="interval",
+        interval_range_s=(4.0, 7.0),
+        is_global_time=False,
+        params={
+            "probability": 0.35,
+            "min_delta_v": 0.15,
+            "max_delta_v": 0.35,
+            "ground_sensor_cfgs": (
+                SceneEntityCfg("left_foot_ground_contact"),
+                SceneEntityCfg("right_foot_ground_contact"),
+            ),
         },
     )
 
@@ -288,7 +305,7 @@ class GetUpRewardsCfg:
             ),
             "stance_width": 0.34,
             "toe_out_rad": 0.08726646,
-            "limb_fraction": 0.10,
+            "limb_fraction": 0.20,
         },
     )
 

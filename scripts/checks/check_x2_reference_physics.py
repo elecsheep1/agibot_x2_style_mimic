@@ -24,6 +24,8 @@ def main():
     p.add_argument('--frame', type=int, default=None, help='Hold a specific reference frame instead of the last frame.')
     p.add_argument('--initial-velocity', choices=['zero', 'reference'], default='zero')
     p.add_argument('--spawn-lift', type=float, default=.002, help='Additional spawn height in meters.')
+    p.add_argument('--local-ground', action='store_true',
+                   help='Use an offline collision cuboid; contact-sensor force fields are not acceptance-grade in this mode.')
     p.add_argument('--report',type=Path,required=True)
     # AppLauncher inspects the parser before the final CLI parse.
     # Defer required custom arguments only during launcher registration.
@@ -49,6 +51,22 @@ def main():
     cfg.scene.num_envs = 1
     if a.device is not None:
         cfg.sim.device = a.device
+    if a.local_ground:
+        import isaaclab.sim as local_sim_utils
+        from isaaclab.assets import AssetBaseCfg
+        # The task sensors filter this exact prim path. A static 10 cm cuboid
+        # with its top at z=0 reproduces the flat-plane contact geometry while
+        # avoiding the online default_environment.usd dependency.
+        cfg.scene.ground = AssetBaseCfg(
+            prim_path="/World/ground/GroundPlane/CollisionPlane",
+            spawn=local_sim_utils.CuboidCfg(
+                size=(100.0, 100.0, 0.1),
+                collision_props=local_sim_utils.CollisionPropertiesCfg(),
+                physics_material=cfg.scene.ground.spawn.physics_material,
+            ),
+            init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, -0.05)),
+        )
+        print('[LOCAL GROUND] 仅用于离线碰撞/轨迹对照；脚力与接触成功条件不作验收结论。', flush=True)
     standing = cfg.terminations.progress.params
     if not np.isclose(cfg.sim.dt*cfg.decimation,motion['metadata']['dt_s']):
         raise ValueError('Physics control dt and motion dt must match.')

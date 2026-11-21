@@ -90,6 +90,14 @@ def self_contact_pressure_cost(
     return (force_factor * duration_factor).sum(dim=-1)
 
 
+def impact_force_cost(force, threshold, scale):
+    """超过阈值后平滑增长，不在固定力值处提前饱和。"""
+    excess = (force - threshold).clamp_min(0.0) / scale
+
+    # 小超限平滑起步，大超限仍增长，但不会像平方项一样急剧放大。
+    return torch.log1p(excess.square())
+
+
 def self_contact_control_cost(sensor) -> torch.Tensor:
     """持续项取物理子步平均，冲击项取每个配对的周期峰值。"""
     persistent_cost = (
@@ -99,13 +107,11 @@ def self_contact_control_cost(sensor) -> torch.Tensor:
         )
     )
 
-    impact_cost = (
-        (
-            sensor.peak_force
-            - sensor.cfg.impact_force_threshold
-        )
-        / sensor.cfg.impact_force_scale
-    ).clamp(0.0, 1.0).square().sum(dim=-1)
+    impact_cost = impact_force_cost(
+        sensor.peak_force,
+        sensor.cfg.impact_force_threshold,
+        sensor.cfg.impact_force_scale,
+    ).sum(dim=-1)
 
     return persistent_cost + sensor.cfg.impact_weight * impact_cost
 
