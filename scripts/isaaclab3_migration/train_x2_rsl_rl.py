@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import sys
 
+import torch
+
 # Register the project's Gym tasks before the unified CLI resolves ``--task``.
 import x2_style_mimic  # noqa: F401
 from isaaclab_rl.entrypoints.dispatch import run_train_cli
@@ -26,9 +28,30 @@ def _apply_x2_prone_compatibility(argv: list[str]) -> list[str]:
             task = argument.split("=", 1)[1]
 
     override_prefix = "env.scene.self_contact.prim_path="
-    if task == "X2-Prone-MultiMotion-v0" and not any(arg.startswith(override_prefix) for arg in argv):
-        return [*argv, f"{override_prefix}/World/envs/env_0/Robot"]
+    if task == "X2-Prone-MultiMotion-v0":
+        _patch_prone_reset_event()
+        if not any(arg.startswith(override_prefix) for arg in argv):
+            return [*argv, f"{override_prefix}/World/envs/env_0/Robot"]
     return argv
+
+
+def _patch_prone_reset_event() -> None:
+    """Adapt the legacy motion-reset callback to Isaac Lab 3 slice env IDs."""
+    from x2_style_mimic.tasks.manager_based.x2_style_mimic import x2_getup_env_cfg
+    from x2_style_mimic.tasks.manager_based.x2_style_mimic.mdp import getup
+
+    original = getup.reset_from_motion_dataset
+    if getattr(original, "_isaaclab3_slice_compatible", False):
+        return
+
+    def reset_from_motion_dataset_compat(env, env_ids, *args, **kwargs):
+        if isinstance(env_ids, slice):
+            env_ids = torch.arange(env.num_envs, device=env.device, dtype=torch.long)[env_ids]
+        return original(env, env_ids, *args, **kwargs)
+
+    reset_from_motion_dataset_compat._isaaclab3_slice_compatible = True
+    x2_getup_env_cfg.GetUpEventsCfg.reset_from_reference.func = reset_from_motion_dataset_compat
+    x2_getup_env_cfg.X2MultiMotionGetUpEnvCfg.events.reset_from_reference.func = reset_from_motion_dataset_compat
 
 
 def main() -> int | None:

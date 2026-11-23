@@ -11,8 +11,9 @@ python scripts/isaaclab3_migration/train_x2_rsl_rl.py \
 ```
 
 For `X2-Prone-MultiMotion-v0`, the launcher automatically supplies the Isaac
-Lab 3-compatible self-contact root path. Do not add that override manually
-unless you need a different source robot path.
+Lab 3-compatible self-contact root path and adapts its first reset, where
+Isaac Lab 3 passes all environment IDs as a slice. Do not add those overrides
+manually unless you need a different source robot path.
 
 Inspect the resolved X2 contact-sensor bodies. With `--viz kit`, close the Kit
 window to stop; `--viz none` runs 100 zero-action simulation steps and exits.
