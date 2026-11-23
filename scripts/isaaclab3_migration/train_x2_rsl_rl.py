@@ -7,6 +7,7 @@ import argparse
 import os
 import sys
 import time
+import traceback
 from datetime import datetime
 from functools import wraps
 
@@ -142,6 +143,11 @@ def main() -> None:
         print("[4/4] Starting training")
         runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
         print(f"Training time: {time.time() - start_time:.2f} seconds")
+    except BaseException:
+        # Kit can otherwise close silently for SystemExit raised by a plugin or
+        # runner constructor; print the original Python failure before shutdown.
+        traceback.print_exc()
+        raise
     finally:
         if env is not None:
             env.close()
