@@ -39,7 +39,6 @@ def _apply_x2_prone_compatibility(argv: list[str]) -> list[str]:
 def _patch_prone_reset_event() -> None:
     """Adapt the legacy MultiMotion environment to Isaac Lab 3 slice IDs."""
     from x2_style_mimic.tasks.manager_based.x2_style_mimic.x2_getup_env import X2MultiMotionGetUpEnv
-    from x2_style_mimic.tasks.manager_based.x2_style_mimic.x2_supermimic_env import X2SuperMimicEnv
 
     def patch_reset_method(env_type) -> None:
         original_reset_idx = env_type._reset_idx
@@ -55,11 +54,10 @@ def _patch_prone_reset_event() -> None:
         reset_idx_compat._isaaclab3_slice_compatible = True
         env_type._reset_idx = reset_idx_compat
 
-    # Convert the initial all-environment slice at each outer reset boundary.
+    # Convert the initial all-environment slice at the outer reset boundary.
     # This covers the motion dataset, assist controller, and terminal-state
     # bookkeeping that were originally written for tensor-only environment IDs.
     patch_reset_method(X2MultiMotionGetUpEnv)
-    patch_reset_method(X2SuperMimicEnv)
 
 
 def main() -> int | None:
