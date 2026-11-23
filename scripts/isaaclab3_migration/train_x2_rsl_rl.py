@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import os
 import sys
 import time
@@ -54,15 +55,25 @@ def _patch_multimotion_reset() -> None:
 
 
 def _runner_config_compat(agent_cfg):
-    """Remove RSL-RL 5.0 model options removed by the Isaac Lab 3 package."""
+    """Filter legacy model options against the installed RSL-RL model API."""
+    from rsl_rl.modules import MLPModel
+
     runner_cfg = agent_cfg.to_dict()
+    accepted = set(inspect.signature(MLPModel.__init__).parameters)
+    accepted.discard("self")
     for model_name in ("actor", "critic"):
         model_cfg = runner_cfg.get(model_name)
         if not isinstance(model_cfg, dict):
             continue
-        for option in ("stochastic", "init_noise_std"):
-            if model_cfg.pop(option, None) is not None:
-                print(f"[compat] Removed legacy {model_name}.{option} option")
+        # ``class_name`` is consumed by OnPolicyRunner to choose MLPModel; it
+        # is not a constructor argument and must be retained for that lookup.
+        unsupported = sorted(
+            option for option in model_cfg if option != "class_name" and option not in accepted
+        )
+        for option in unsupported:
+            model_cfg.pop(option)
+        if unsupported:
+            print(f"[compat] Removed unsupported {model_name} options: {', '.join(unsupported)}")
     return runner_cfg
 
 
