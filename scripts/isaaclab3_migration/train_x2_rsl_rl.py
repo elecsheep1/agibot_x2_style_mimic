@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sys
+from functools import wraps
 
 import gymnasium as gym
 import torch
@@ -45,6 +46,7 @@ def _patch_prone_reset_event() -> None:
     if getattr(original, "_isaaclab3_slice_compatible", False):
         return
 
+    @wraps(original)
     def reset_from_motion_dataset_compat(env, env_ids, *args, **kwargs):
         if isinstance(env_ids, slice):
             env_ids = torch.arange(env.num_envs, device=env.device, dtype=torch.long)[env_ids]
