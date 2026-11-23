@@ -45,52 +45,29 @@ class WorldModelTests(unittest.TestCase):
         self.actions = torch.randn(3, 8, 29) * .1
         self.context = torch.randn(3, 4)
         self.batch = dict(states=self.initial[:, None].repeat(1, 9, 1),
-                          actions=self.actions, context=self.context, assist_wrench_w=torch.zeros(3, 8, 6))
+                          actions=self.actions, context=self.context)
         self.model = self.make_model()
 
     def rollout(self, actions):
-        return wm.rollout_conditioned_actions(
+        return wm.rollout_logged_actions(
             self.model, self.initial, actions, self.context,
-            self.batch["assist_wrench_w"], torch.zeros(3, 8, 6),
-        )["states"]
+        )
 
     def make_model(self):
         limiter = wm.TargetLimiter(torch.zeros(29), .25, -torch.ones(29),
                                    torch.ones(29), torch.full((29,), .1))
-        return wm.WorldModel(self.spec, 4, limiter, hidden_dims=(32, 32))
+        timing = dict(dt=.02, decimation=10) if hasattr(wm.WorldModel, 'DYNAMICS_MODE') else {}
+        return wm.WorldModel(self.spec, 4, limiter, hidden_dims=(32, 32), **timing)
 
     def test_normalization_required_and_finite(self):
         with self.assertRaises(RuntimeError):
-            self.model(self.initial, self.actions[:, 0], self.context, torch.zeros(3, 6))
+            self.model(self.initial, self.actions[:, 0], self.context)
         self.model.fit_input_stats(self.batch)
         self.assertFalse(self.model.input_mean.requires_grad)
         self.assertTrue(bool(torch.isfinite(self.model.input_std).all()))
         self.assertTrue(bool((self.model.input_std >= 1e-3).all()))
 
-    def test_push_is_applied_after_physics_and_next_step_sees_it(self):
-        class IdentityModel:
-            spec = self.spec
-            def __call__(self, state, action, context, assist_wrench_w):
-                return state.clone()
-        delta = torch.zeros(3, 8, 6)
-        delta[:, 0, 0] = 2.
-        output = wm.rollout_conditioned_actions(IdentityModel(), self.initial, self.actions,
-            self.context, torch.zeros_like(delta), delta)
-        self.assertEqual(output['physics_states'].shape, (3, 9, self.spec.dim))
-        torch.testing.assert_close(output['physics_states'][:, 0], self.initial)
-        torch.testing.assert_close(output['physics_states'][:, 1, 7], torch.zeros(3))
-        torch.testing.assert_close(output['states'][:, 1, 7], torch.full((3,), 2.))
-        torch.testing.assert_close(output['physics_states'][:, 2, 7], torch.full((3,), 2.))
 
-    def test_assistance_channels_and_input_gradient(self):
-        self.model.fit_input_stats(self.batch)
-        force = torch.randn(3, 6, requires_grad=True)
-        features, _ = self.model.features(self.initial, self.actions[:, 0], self.context, force)
-        torch.testing.assert_close(features[:, -6:], force)
-        out = self.model(self.initial, self.actions[:, 0], self.context, force)
-        grad = torch.autograd.grad(out[:, :75].square().sum(), force)[0]
-        self.assertTrue(torch.isfinite(grad).all())
-        self.assertGreater(float(grad.abs().sum()), 0.)
 
     def test_limiter_matches_hard_limit_then_rate_limit(self):
         limiter = self.model.limiter
@@ -144,8 +121,8 @@ class WorldModelTests(unittest.TestCase):
         self.model.fit_input_stats(self.batch)
         flipped = self.initial.clone()
         flipped[:, 3:7] *= -1
-        features, _ = self.model.features(self.initial, self.actions[:, 0], self.context, torch.zeros(3, 6))
-        other, _ = self.model.features(flipped, self.actions[:, 0], self.context, torch.zeros(3, 6))
+        features, _ = self.model.features(self.initial, self.actions[:, 0], self.context)
+        other, _ = self.model.features(flipped, self.actions[:, 0], self.context)
         torch.testing.assert_close(features, other)
         torch.testing.assert_close(wm.rotation_error(self.initial[:, 3:7], flipped[:, 3:7]),
                                    torch.zeros(3))
@@ -173,8 +150,8 @@ class WorldModelTests(unittest.TestCase):
         self.model.fit_input_stats(self.batch)
         restored = self.make_model()
         restored.load_state_dict(self.model.state_dict())
-        torch.testing.assert_close(restored(self.initial, self.actions[:, 0], self.context, torch.zeros(3, 6)),
-                                   self.model(self.initial, self.actions[:, 0], self.context, torch.zeros(3, 6)))
+        torch.testing.assert_close(restored(self.initial, self.actions[:, 0], self.context),
+                                   self.model(self.initial, self.actions[:, 0], self.context))
         self.assertTrue(bool(restored.stats_ready))
 
     def test_frozen_model_retains_action_gradient(self):

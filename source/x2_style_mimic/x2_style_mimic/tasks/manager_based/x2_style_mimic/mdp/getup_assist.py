@@ -3,6 +3,11 @@
 from collections import deque
 import torch
 
+from .assistance import (
+    HeightAssistanceCfg,
+    height_assistance,
+)
+
 
 class GetUpAssist:
     def __init__(self, env):
@@ -14,6 +19,12 @@ class GetUpAssist:
         self.zero_probability = float(env.cfg.assist_zero_probability)  # 读取零辅助概率，范围 [0, 1]。
         self.full_below_height = float(env.cfg.assist_full_below_height)# 读取最大辅助力保持高度，单位米
         self.zero_above_height = float(env.cfg.assist_zero_above_height)# 读取辅助力完全撤除高度，单位米。
+        self.height_assistance_cfg = (
+            HeightAssistanceCfg(
+                full_below_height=self.full_below_height,
+                zero_above_height=self.zero_above_height,
+            )
+        )
 
         if (
             not self.levels
@@ -168,23 +179,25 @@ class GetUpAssist:
             * self.env.step_dt
         )
         height = self.robot.data.root_pos_w.torch[:, 2] - self.env.scene.env_origins[:, 2]
-        # 第一次达到撤力高度时，记录时刻并锁定
-        newly_withdrawn = ~self.withdrawn & (height >= self.zero_above_height)
-        self.withdraw_time[newly_withdrawn] = elapsed[newly_withdrawn]
-        self.withdrawn |= newly_withdrawn
-        # 计算当前骨盆高度对应的辅助力衰减比例，范围 [0, 1]，在 full_below_height 以下为 1，在 zero_above_height 以上为 0。
-        progress = (
-            (height - self.full_below_height) / (self.zero_above_height - self.full_below_height)
-        ).clamp(0.0, 1.0)
-        # 从 1 平滑下降到 0。
-        fade = 1.0 - progress.square() * (3.0 - 2.0 * progress)
-        self.applied_force.copy_(
-            torch.where(
-                self.withdrawn,
-                torch.zeros_like(self.applied_force),
-                self.episode_force * fade,
+        force, next_withdrawn = (
+            height_assistance(
+                height=height,
+                force_cap=self.episode_force,
+                withdrawn=self.withdrawn,
+                cfg=self.height_assistance_cfg,
             )
         )
+
+        # 第一次达到撤力高度时，记录时刻并锁定
+        newly_withdrawn = (
+            ~self.withdrawn
+            & next_withdrawn
+        )
+        self.withdraw_time[newly_withdrawn] = elapsed[newly_withdrawn]
+        self.withdrawn.copy_(
+            next_withdrawn
+        )
+        self.applied_force.copy_(force)
         self.forces.zero_()                                         # 先把所有环境的力清零。
         self.forces[:, 0, 2] = self.applied_force                   # 施加的辅助力方向为全局 Z 轴向上，单位牛顿。
 

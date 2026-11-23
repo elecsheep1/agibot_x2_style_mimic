@@ -1,5 +1,3 @@
-"""真实与想象环境共享的高度辅助规则。"""
-
 from dataclasses import dataclass
 import math
 

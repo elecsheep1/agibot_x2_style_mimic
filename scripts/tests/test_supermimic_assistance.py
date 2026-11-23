@@ -9,7 +9,7 @@ import torch
 
 BASE = Path(__file__).resolve().parents[2] / 'source/x2_style_mimic/x2_style_mimic'
 TASK = BASE / 'tasks/manager_based/x2_style_mimic'
-p = TASK / 'mdp/supermimic/assistance.py'
+p = TASK / 'mdp/assistance.py'
 spec = importlib.util.spec_from_file_location('_height_assist_test', p)
 a = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = a
@@ -40,12 +40,20 @@ class AssistanceTests(unittest.TestCase):
                               robot=SimpleNamespace(data=SimpleNamespace(root_pos_w=SimpleNamespace(torch=pose)),
                               permanent_wrench_composer=SimpleNamespace(reset=lambda: None, add_forces_and_torques_index=lambda **kw: None)),
                               full_below_height=.2, zero_above_height=.5, withdrawn=withdrawn.clone(),
+                              height_assistance_cfg=self.cfg,
                               withdraw_time=torch.full((7,), float('inf')), episode_force=cap,
                               applied_force=torch.zeros(7), forces=torch.zeros(7, 1, 3), torques=torch.zeros(7, 1, 3), body_ids=torch.tensor([0]))
         ns['apply'](obj)
         force, flags = a.height_assistance(height, cap, withdrawn, self.cfg)
         torch.testing.assert_close(force, obj.applied_force, atol=0, rtol=0)
+        torch.testing.assert_close(obj.applied_force, torch.tensor([100., 75., 25., 0., 0., 0., 0.]))
         torch.testing.assert_close(flags, obj.withdrawn)
+        torch.testing.assert_close(obj.withdraw_time[3:5], torch.full((2,), .24))
+        # 高度重新降低后不恢复辅助，也不覆盖首次撤力时间。
+        pose[:, 2] = .1
+        obj.env.episode_length_buf.fill_(20)
+        ns['apply'](obj)
+        torch.testing.assert_close(obj.applied_force[3:], torch.zeros(4))
         torch.testing.assert_close(obj.withdraw_time[3:5], torch.full((2,), .24))
 
     def test_zero_assistance_and_lock_after_falling_back(self):
@@ -56,19 +64,17 @@ class AssistanceTests(unittest.TestCase):
 
     def test_multistep_action_gradient_and_reset_copies(self):
         class ToyModel:
-            def __call__(self, state, action, context, assist_wrench_w):
-                return torch.cat((state[:, :2], state[:, 2:3] + action + assist_wrench_w[:, 2:3] * .0001, state[:, 3:]), -1)
-        env = ImaginedEnv(ToyModel(), self.cfg)
+            def __call__(self, state, action, context):
+                return torch.cat((state[:, :2], state[:, 2:3] + action, state[:, 3:]), -1)
+        env = ImaginedEnv(ToyModel())
         initial = torch.zeros(1, 13)
         initial[:, 2] = .3
-        memory = dict(assist_force_cap_n=torch.tensor([100.]), assist_withdrawn=torch.tensor([False]))
-        env.reset(initial, torch.zeros(1, 1), memory)
-        memory['assist_force_cap_n'].zero_()
+        env.reset(initial, torch.zeros(1, 1))
         first = torch.tensor([[.01]], requires_grad=True)
         env.step(first)
         last = env.step(torch.tensor([[.01]], requires_grad=True))
-        self.assertGreater(float(env.applied_wrench_w[0, 2].detach()), 0.)
         self.assertGreater(float(torch.autograd.grad(last[:, 2].sum(), first)[0].abs().sum()), 0.)
+
 
 
 if __name__ == '__main__':

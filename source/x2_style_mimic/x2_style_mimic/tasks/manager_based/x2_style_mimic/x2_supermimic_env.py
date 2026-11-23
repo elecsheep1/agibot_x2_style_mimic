@@ -8,19 +8,26 @@ from x2_style_mimic.algorithms.supermimic.state import (
 )
 
 from .x2_getup_env import (
-    X2MultiMotionGetUpEnv,
+    X2AMPGetUpEnv,
 )
 
 from .mdp.supermimic.transition_data import (
     read_task_memory,
-    read_contact_targets,
 )
 
 
 class X2SuperMimicEnv(
-    X2MultiMotionGetUpEnv
+    X2AMPGetUpEnv
 ):
-    """复用原起身执行流程，额外保存世界模型转移。"""
+    """
+    复用原起身执行流程，额外保存世界模型转移。
+    保留：
+    自动重置前的真实终止状态。
+    AMP 终止状态。
+    起身成功统计。
+    出生类型分组统计。
+    """
+    transition_schema_version = 4
 
     @torch.no_grad()
     def read_world_state(self):
@@ -82,56 +89,41 @@ class X2SuperMimicEnv(
     def _capture_transition_auxiliary(self):
         return {
             "task_memory": read_task_memory(self),
-            "contact_targets": read_contact_targets(self),
         }
 
     def step(self, action):
-        before = self.read_world_state()
         sent_action = action.detach().clone()
-
-        task_before = read_task_memory(self)
-        # interval 事件在本控制步物理积分之后执行。
-        # 记录外部事件造成的速度变化
-        self._wm_interval_delta_velocity = torch.zeros(
-            self.num_envs,
-            6,      # [Δvx, Δvy, Δvz, Δωx, Δωy, Δωz]
-            device=self.device,
-        )
-        # 标记哪些环境发生了推扰
-        self._wm_interval_push_mask = torch.zeros(
-            self.num_envs,
-            dtype=torch.bool,
-            device=self.device,
-        )
-
-        # 终止环境的辅助任务与接触数据在 reset 前填入。
-        self._wm_terminal_auxiliary = None
 
         if sent_action.shape != (
             self.num_envs,
             self.world_state_spec.num_actions,
         ):
             raise ValueError("动作形状必须为 [环境数量, 控制关节数量]")
-        if not torch.isfinite(
-            sent_action
-        ).all():
+        if not bool(torch.isfinite(sent_action).all()):
             raise ValueError("动作包含 NaN 或无穷值")
 
-        self._wm_terminal_state = (
-            torch.empty_like(before)
-        )
+        before = self.read_world_state()
+        task_before = read_task_memory(self)
+
+        # 必须在自动重置之前保存出生分组。
+        birth_metadata = {
+            "motion_ids": (self._getup_reference_motion_ids.clone()),
+            "birth_types": self._getup_birth_types.clone(),
+            "bank_row_ids": self._getup_bank_row_ids.clone(),
+            "recovery_row_ids": (self._getup_recovery_row_ids.clone()),
+        }
+
+        self._wm_terminal_state = torch.empty_like(before)
         self._wm_terminal_mask = torch.zeros(
             self.num_envs,
             dtype=torch.bool,
             device=self.device,
         )
+        self._wm_terminal_auxiliary = None
 
         self._wm_capture_active = True
-
         try:
-            result = super().step(
-                sent_action
-            )
+            result = super().step(sent_action)
         finally:
             self._wm_capture_active = False
 
@@ -145,130 +137,73 @@ class X2SuperMimicEnv(
 
         done = terminated | truncated
 
-        if not torch.equal(
-            done,
-            self._wm_terminal_mask,
-        ):
-            raise RuntimeError("世界模型终止状态捕获与环境自动重置不一致")
+        if not torch.equal(done, self._wm_terminal_mask):
+            raise RuntimeError("世界模型终止状态捕获与自动重置不一致")
 
         following = self.read_world_state()
+        following[done] = self._wm_terminal_state[done]
 
-        # 已结束环境必须使用重置前的最终状态，
-        # 不能使用新回合的出生状态。
-        following[done] = (
-            self._wm_terminal_state[done]
-        )
+        auxiliary = self._capture_transition_auxiliary()
 
-        auxiliary = (
-            self._capture_transition_auxiliary()
-        )
-        # 自动重置已经清除了旧回合任务与接触缓存，
-        # 必须换回重置前保存的数据。
         if bool(done.any()):
             if self._wm_terminal_auxiliary is None:
-                raise RuntimeError("终止回合缺少任务与接触监督快照")
+                raise RuntimeError("终止回合缺少任务状态快照")
 
-            # 把已经结束的环境的辅助数据，替换成自动重置之前保存的终止数据。未结束的环境保持不变。
             for group, fields in auxiliary.items():
-                    for name, value in fields.items():
-                        value[done] = (
-                            self._wm_terminal_auxiliary[
-                                group
-                            ][name][done]
-                        )
+                for name, value in fields.items():
+                    value[done] = (
+                        self._wm_terminal_auxiliary[
+                            group
+                        ][name][done]
+                    )
 
-        # 本步真正参与物理积分的辅助力。
-        # 原起身环境已经保留了重置前的逐步快照。
-        applied_force = (
-            extras["getup_progress"][
-                "assist_applied_force_n"
-            ]
-            .detach()
-            .clone()
+        # GetUpProgress 已经在终止判断阶段保存真实步后数据。
+        progress = {
+            name: value.clone()
+            for name, value
+            in self._getup_progress_snapshot.items()
+        }
+        progress.update(birth_metadata)
+        extras["getup_progress"] = progress
+
+        fade_start = float(self.cfg.amp_gate_fade_start_s)
+        fade_end = float(self.cfg.amp_gate_fade_end_s)
+
+        if not 0.0 <= fade_start < fade_end:
+            raise ValueError("AMP 门控时间范围无效")
+
+        hold = progress["hold_seconds"]
+        blend = (
+            (hold - fade_start)
+            / (fade_end - fade_start)
+        ).clamp(0.0, 1.0)
+
+        extras["amp_reward_gate"] = (
+            1.0 - blend.square() * (3.0 - 2.0 * blend)
         )
-
-        # 世界坐标，施加在 torso 质心的力／力矩。
-        assist_wrench = torch.zeros(
-            self.num_envs,
-            6,          # [fx, fy, fz, τx, τy, τz]
-            device=self.device,
+        extras["amp_policy_sample_mask"] = (
+            hold <= self.cfg.amp_policy_sample_max_hold_s
         )
-        assist_wrench[:, 2] = applied_force
-
-        # 自动重置后发生的推扰属于新回合，
-        # 不得归到刚结束的旧回合转移。
-        delta_velocity = (
-            self._wm_interval_delta_velocity
-            .detach()
-            .clone()
-        )
-        push_mask = (
-            self._wm_interval_push_mask
-            .detach()
-            .clone()
-        )
-
-        delta_velocity[done] = 0.0
-        push_mask[done] = False
-
-        # following 是 interval 事件后的状态。
-        # 奖励和成功判定使用的是事件前状态。
-        reward_state = following.clone()
-
-        # 状态布局：
-        # 根位姿 [0:7]，根线／角速度 [7:13]。
-        reward_state[:, 7:13] -= delta_velocity
 
         extras["world_model"] = {
+            "schema_version": self.transition_schema_version,
             "state": before,
             "action": sent_action,
             "next_state": following,
-            # 原起身 RewardManager 的真实任务奖励。
-            # 不包含算法侧额外计算的 AMP 奖励。
-            "reward": (
-                rewards.detach().clone()
+            "reward": rewards.detach().clone(),
+            "terminated": terminated.detach().clone(),
+            "truncated": truncated.detach().clone(),
+            "task_memory": task_before,
+            "next_task_memory": auxiliary["task_memory"],
+            "amp_reward_gate": (
+                extras["amp_reward_gate"].detach().clone()
             ),
-            "terminated": (
-                terminated.detach().clone()
-            ),
-            "truncated": (
-                truncated.detach().clone()
+            "amp_policy_sample_mask": (
+                extras["amp_policy_sample_mask"]
+                .detach()
+                .clone()
             ),
         }
-
-        extras["world_model"].update(
-            {
-                "schema_version": 2,
-                "task_memory": task_before,
-                "next_task_memory": (
-                    auxiliary["task_memory"]
-                ),
-
-                "contact_targets": (
-                    auxiliary["contact_targets"]
-                ),
-
-                "assist_wrench_w": assist_wrench,
-
-                "interval_delta_velocity_w": (
-                    delta_velocity
-                ),
-                "interval_push_mask": push_mask,
-
-                "reward_state": reward_state,
-
-                "amp_reward_gate": (
-                    extras["amp_reward_gate"]
-                    .detach()
-                    .clone()
-                ),
-                "amp_policy_sample_mask": (
-                    extras["amp_policy_sample_mask"]
-                    .detach()
-                    .clone()
-                ),
-            }
-        )
 
         return (
             observations,
@@ -279,18 +214,19 @@ class X2SuperMimicEnv(
         )
 
     def _reset_idx(self, env_ids):
-        if getattr(
-            self,
-            "_wm_capture_active",
-            False,
-        ):
-            terminal_state = (
-                self.read_world_state()
-            )
+        episode_stats = None
 
-            auxiliary = (
-                self._capture_transition_auxiliary()
+        if (
+            getattr(self, "_wm_capture_active", False)
+            and len(env_ids) > 0
+        ):
+            terminal_state = self.read_world_state()
+            auxiliary = self._capture_transition_auxiliary()
+
+            self._wm_terminal_state[env_ids] = (
+                terminal_state[env_ids]
             )
+            self._wm_terminal_mask[env_ids] = True
 
             if self._wm_terminal_auxiliary is None:
                 self._wm_terminal_auxiliary = {
@@ -298,8 +234,7 @@ class X2SuperMimicEnv(
                         name: torch.empty_like(value)
                         for name, value in fields.items()
                     }
-                    for group, fields
-                    in auxiliary.items()
+                    for group, fields in auxiliary.items()
                 }
 
             for group, fields in auxiliary.items():
@@ -308,14 +243,60 @@ class X2SuperMimicEnv(
                         group
                     ][name][env_ids] = value[env_ids]
 
-            self._wm_terminal_state[
-                env_ids
-            ] = terminal_state[env_ids]
+            episode_stats = {
+                name: value[env_ids].clone()
+                for name, value
+                in self._getup_progress_snapshot.items()
+            }
+            episode_stats["birth_types"] = (
+                self._getup_birth_types[env_ids].clone()
+            )
 
-            self._wm_terminal_mask[
-                env_ids
-            ] = True
-
-        # 继续执行原起身环境的终止状态捕获、
-        # 回合统计、参考重置和辅助状态重置。
+        # X2AMPGetUpEnv 继续捕获 AMP 终止状态，
+        # 然后由 ManagerBasedRLEnv 执行实际重置。
         super()._reset_idx(env_ids)
+
+        if episode_stats is None:
+            return
+
+        required_hold = float(
+            self.cfg.terminations.progress.params["hold_time"]
+        )
+        log = self.extras.setdefault("log", {})
+
+        values = {
+            "success_rate": (
+                episode_stats["succeeded"].float()
+            ),
+            "stable_at_end_rate": (
+                episode_stats["hold_seconds"]
+                >= required_hold
+            ).float(),
+            "max_hold_seconds": (
+                episode_stats["max_hold_seconds"]
+            ),
+            "final_hold_seconds": (
+                episode_stats["hold_seconds"]
+            ),
+        }
+
+        for name, value in values.items():
+            log[f"GetUp/{name}"] = value.mean().item()
+
+        birth_names = {
+            0: "reference_initial",
+            1: "perturbed_initial",
+            2: "reference_rsi",
+            3: "simulated_fall",
+            4: "dynamic_recovery",
+        }
+
+        for birth_type, birth_name in birth_names.items():
+            mask = (
+                episode_stats["birth_types"] == birth_type
+            )
+            if bool(mask.any()):
+                for name, value in values.items():
+                    log[
+                        f"GetUp/{birth_name}/{name}"
+                    ] = value[mask].mean().item()

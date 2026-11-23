@@ -25,6 +25,12 @@ class GetupTaskCfg:
     soft_limit_fraction: float = 0.9
     max_distance: float = 2.0
     boundary_transition: float = 0.1
+    # 工程初值，单位米；后续根据仿真核对。
+    contact_distance: float = 0.005
+    contact_transition: float = 0.005
+    head_contact_weight: float = 2.0
+    head_contact_distance: float = 0.0
+    head_contact_transition: float = 0.005
 
 
 class GetupTask(nn.Module):
@@ -37,12 +43,14 @@ class GetupTask(nn.Module):
         cfg,
         kinematics,
         control_joint_ids,
+        contact_geometry,
     ):
         super().__init__()
 
         self.spec = spec
         self.cfg = cfg
         self.kinematics = kinematics
+        self.contact_geometry = contact_geometry
 
         if not all(
             math.isfinite(value)
@@ -53,6 +61,8 @@ class GetupTask(nn.Module):
             cfg.step_dt,
             cfg.max_distance,
             cfg.boundary_transition,
+            cfg.contact_transition,
+            cfg.head_contact_transition,
         ) <= 0:
             raise ValueError("控制周期、越界距离和过渡宽度必须大于零")
         if not 0.0 < cfg.soft_limit_fraction <= 1.0:
@@ -65,10 +75,13 @@ class GetupTask(nn.Module):
             cfg.joint_limit_weight,
             cfg.joint_acc_weight,
             cfg.boundary_weight,
+            cfg.head_contact_weight,
         )
 
         if min(weights) < 0:
             raise ValueError("奖励和惩罚权重必须为非负数")
+        if cfg.contact_distance < 0:
+            raise ValueError("接触距离阈值不能为负")
 
         limits = (
             torch.as_tensor(joint_limits)
@@ -150,6 +163,37 @@ class GetupTask(nn.Module):
             + quaternion[..., 1].square()
         )
 
+    def contact_proximity(self, state):
+        """几何接近程度，不代表承重或接触力。"""
+        clearance = self.contact_geometry(state)
+
+        return torch.sigmoid(
+            (
+                self.cfg.contact_distance
+                - clearance
+            )
+            / self.cfg.contact_transition
+        )
+
+    def head_contact_cost(self, state):
+        """有限范围的头部接地代理，远离地面时严格为零。"""
+        clearance = self.contact_geometry(state)[:, 4:6]
+
+        level = (
+            (
+                self.cfg.head_contact_distance
+                - clearance
+            )
+            / self.cfg.head_contact_transition
+        ).clamp(0.0, 1.0)
+
+        proximity = (
+            level.square()
+            * (3.0 - 2.0 * level)
+        )
+
+        return proximity.sum(dim=-1)
+
     def standing_quality(self, state):
         """根据预测状态计算几何姿态与速度稳定性。"""
         fields = unpack_state(state, self.spec)
@@ -221,12 +265,27 @@ class GetupTask(nn.Module):
             / 0.60**2
         )
 
+        proximity = self.contact_proximity(state)
+
+        feet_support = proximity[:, :2].prod(dim=-1)
+
+        hands_clear = (
+            1.0 - proximity[:, 2:4]
+        ).prod(dim=-1)
+
+        support_quality = feet_support * hands_clear
+
+        standing_score = (
+            0.65 * stability_quality
+            + 0.35 * support_quality
+        )
+
         return (
             0.35 * geometry_quality
             + 0.65
             * near_standing
             * upright_gate
-            * stability_quality
+            * standing_score
         )
 
     def reward(
@@ -298,6 +357,8 @@ class GetupTask(nn.Module):
             joint_acceleration.square().sum(dim=-1)
         )
 
+        head_contact = self.head_contact_cost(following)
+
         terms = {
             "standing": (
                 cfg.standing_weight
@@ -324,6 +385,10 @@ class GetupTask(nn.Module):
                 )
                 / cfg.step_dt
             ),
+            "head_contact": (
+                -cfg.head_contact_weight
+                * head_contact
+            ),
         }
 
         # 只在这里乘一次控制周期。
@@ -340,7 +405,7 @@ class GetupTask(nn.Module):
         return total, terms
 
     def termination_probability(self, state):
-        """只对离开实验区域进行软终止。"""
+        """前向使用真实越界事件，反向使用平滑代理梯度。"""
         fields = unpack_state(state, self.spec)
 
         distance = torch.linalg.vector_norm(
@@ -348,13 +413,18 @@ class GetupTask(nn.Module):
             dim=-1,
         )
 
-        return torch.sigmoid(
+        hard = (
+            distance > self.cfg.max_distance
+        ).to(distance.dtype)
+
+        soft = torch.sigmoid(
             (
-                distance
-                - self.cfg.max_distance
+                distance - self.cfg.max_distance
             )
             / self.cfg.boundary_transition
         )
+
+        return hard + (soft - soft.detach())
 
     def terminated(self, state):
         """倒地本身不终止，水平越界才终止。"""

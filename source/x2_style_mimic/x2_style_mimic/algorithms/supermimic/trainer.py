@@ -18,7 +18,7 @@ from .rollout import (
     imagine,
 )
 from .world_model import (
-    rollout_conditioned_actions,
+    rollout_logged_actions,
     dynamics_loss,
 )
 
@@ -54,7 +54,6 @@ class SuperMimicTrainer:
         style,
         task,
         cfg=None,
-        assistance_cfg=None,
     ):
         self.actor = actor
         self.critic = critic
@@ -63,8 +62,6 @@ class SuperMimicTrainer:
         self.amp_features = amp_features
         self.style = style
         self.task = task
-        self.assistance_cfg = assistance_cfg
-
         self.cfg = (
             TrainerCfg()    # 创建默认配置
             if cfg is None
@@ -150,41 +147,16 @@ class SuperMimicTrainer:
             set_to_none=True,
         )
 
-        required = (
-            "assist_wrench_w",
-            "interval_delta_velocity_w",
-            "reward_state",
-        )
-        for name in required:
-            if name not in data:
-                raise ValueError(f"世界模型监督缺少字段：{name}")
-
-        rollout = rollout_conditioned_actions(
+        rollout = rollout_logged_actions(
             model=self.world_model,
             initial_state=data["states"][:, 0],
             actions=data["actions"],
             context=data["context"],
-            assist_wrenches_w=(
-                data["assist_wrench_w"]
-            ),
-            interval_delta_velocities_w=(
-                data["interval_delta_velocity_w"]
-            ),
-        )
-
-        # dynamics_loss 约定第 0 帧为给定起点，
-        # 因此监督目标前补一个起点。
-        target_physics = torch.cat(
-            (
-                data["states"][:, :1],
-                data["reward_state"],
-            ),
-            dim=1,
         )
 
         loss, terms = dynamics_loss(
-            predicted_states=rollout["physics_states"],
-            target_states=target_physics,       # 训练的是世界模型：让它预测的状态尽量接近环境中实际发生的状态。
+            predicted_states=rollout,
+            target_states=data["states"],       # 训练的是世界模型：让它预测的状态尽量接近环境中实际发生的状态。
             state_spec=self.world_model.spec,
         )
 
@@ -215,6 +187,7 @@ class SuperMimicTrainer:
             },
         }
 
+
     def update_discriminator(
         self,
         reference_windows,
@@ -239,21 +212,14 @@ class SuperMimicTrainer:
         history,
         context,
         goals,
-        task_memory,
     ):
         if not bool(self.world_model.stats_ready):
             raise RuntimeError("先训练世界模型，或加载包含输入统计量的 checkpoint")
-        if self.assistance_cfg is None:
-            raise RuntimeError("Actor 想象更新缺少辅助规则配置")
+
 
         history = history.detach().to(self.device)
         context = context.detach().to(self.device)
         goals = goals.detach().to(self.device)
-        task_memory = detach_world_batch(
-            task_memory,
-            self.device,
-        )
-
         self.actor_optimizer.zero_grad(
             set_to_none=True,
         )
@@ -285,8 +251,6 @@ class SuperMimicTrainer:
                 history=history,
                 context=context,
                 goals=goals,
-                task_memory=task_memory,
-                assistance_cfg=self.assistance_cfg,
                 horizon=self.cfg.horizon,
             )
 
@@ -383,9 +347,9 @@ class SuperMimicTrainer:
         with torch.no_grad():
             values = self.critic(
                 # 先合并时间维和批次维，方便一次性计算所有状态的价值。
-                state.reshape(-1, state.shape[-1]),
-                contexts.reshape(-1, contexts.shape[-1]),
-                goals.flatten(0, 1),
+                state=state.flatten(0, 1),
+                context=contexts.flatten(0, 1),
+                goals=goals.flatten(0, 1),
             ).reshape(
                 horizon + 1,
                 batch_size,

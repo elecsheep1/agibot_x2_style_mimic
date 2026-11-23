@@ -19,6 +19,20 @@ def shared_vector(value, count, name, device):
     return value.clone()
 
 
+def action_bounds_from_calibration(calibration):
+    """反算关节位置动作的有效数值范围，兼容正负缩放。"""
+    offset, scale, lower, upper = (calibration[name] for name in ('offset', 'scale', 'lower', 'upper'))
+    if (any(value.shape != offset.shape for value in (scale, lower, upper))
+            or not all(bool(torch.isfinite(value).all()) for value in (offset, scale, lower, upper))
+            or bool((scale == 0).any()) or bool((lower >= upper).any())):
+        raise ValueError('动作标定必须形状一致、有限、缩放非零且限位有效')
+    first, second = (lower - offset) / scale, (upper - offset) / scale
+    action_lower, action_upper = torch.minimum(first, second), torch.maximum(first, second)
+    if bool((action_lower >= 0).any()) or bool((action_upper <= 0).any()):
+        raise ValueError('默认目标必须严格位于关节限位内，才能保持零动作的平滑映射')
+    return action_lower, action_upper
+
+
 def read_world_checkpoint(path, expected_metadata, limiter_values, context_dim, device):
     checkpoint = torch.load(path, map_location=device, weights_only=False)
     required = {'model', 'metadata', 'hidden_dims', 'limiter', 'context_dim'}

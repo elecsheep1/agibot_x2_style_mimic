@@ -160,6 +160,12 @@ def environment_class():
             self.current = self.current + 10
             if self.fail_step:
                 raise RuntimeError('step probe')
+            self._getup_progress_snapshot = {
+                'hold_seconds': self.current[:, 0].clone(),
+                'max_hold_seconds': self.current[:, 0].clone(),
+                'succeeded': torch.zeros(self.num_envs, dtype=torch.bool),
+                'first_success_time': torch.full((self.num_envs,), -1.),
+            }
             ids = (self.terminated | self.truncated).nonzero().flatten()
             if ids.numel():
                 self._reset_idx(ids)
@@ -175,9 +181,8 @@ def environment_class():
     tree = ast.parse(path.read_text())
     node = next(n for n in tree.body if isinstance(n, ast.ClassDef)
                 and n.name == 'X2SuperMimicEnv')
-    namespace = dict(torch=torch, X2MultiMotionGetUpEnv=MockBase,
+    namespace = dict(torch=torch, X2AMPGetUpEnv=MockBase,
                      read_task_memory=lambda env: {'hold_steps': env.current[:, 0].clone()},
-                     read_contact_targets=lambda env: {'self_contact_cost': env.current[:, 0].clone()},
                      StateSpec=state.StateSpec, pack_state=state.pack_state)
     exec(compile(ast.Module(body=[node], type_ignores=[]), str(path), 'exec'), namespace)
     return namespace['X2SuperMimicEnv']
@@ -192,6 +197,13 @@ class EnvironmentCaptureTests(unittest.TestCase):
         env.terminated = torch.tensor(terminated)
         env.truncated = torch.tensor(truncated)
         env.fail_step = False
+        env.extras = {}
+        env.cfg = SimpleNamespace(amp_gate_fade_start_s=1., amp_gate_fade_end_s=2.,
+            amp_policy_sample_max_hold_s=3.,
+            terminations=SimpleNamespace(progress=SimpleNamespace(params={'hold_time': 3.})))
+        for name in ('_getup_reference_motion_ids', '_getup_birth_types',
+                     '_getup_bank_row_ids', '_getup_recovery_row_ids'):
+            setattr(env, name, torch.zeros(3, dtype=torch.long))
         env.read_world_state = lambda: env.current.clone()
         env.scene = {'robot': SimpleNamespace(data=SimpleNamespace(joint_pos=torch.zeros(3, 1)))}
         env.action_manager = SimpleNamespace(get_term=lambda name: SimpleNamespace(raw_actions=torch.zeros(3, 1)))
@@ -205,7 +217,6 @@ class EnvironmentCaptureTests(unittest.TestCase):
         torch.testing.assert_close(record['next_state'][:, :1], torch.tensor([[11.], [12.], [13.]]))
         torch.testing.assert_close(env.current[:, :1], torch.tensor([[-100.], [-100.], [13.]]))
         torch.testing.assert_close(record['next_task_memory']['hold_steps'], torch.tensor([11., 12., 13.]))
-        torch.testing.assert_close(record['contact_targets']['self_contact_cost'], torch.tensor([11., 12., 13.]))
         self.assertFalse(env._wm_capture_active)
         env.terminated.zero_()
         env.truncated.zero_()

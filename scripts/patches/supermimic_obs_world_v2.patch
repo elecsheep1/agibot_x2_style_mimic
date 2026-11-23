@@ -1,0 +1,114 @@
+--- a/source/x2_style_mimic/x2_style_mimic/algorithms/supermimic/observations.py
++++ b/source/x2_style_mimic/x2_style_mimic/algorithms/supermimic/observations.py
+@@ -6,6 +6,45 @@
+     normalize_quaternion,
+     inverse_rotate_vector,
+ )
++
++
++class ObservationNormalizer(nn.Module):
++    """单帧观测统计；只由真实采样显式更新，forward 不修改统计量。"""
++
++    def __init__(self, dimension, minimum_std=0.01, clip=10.0):
++        super().__init__()
++        self.minimum_std = float(minimum_std)
++        self.clip = float(clip)
++        self.register_buffer("mean", torch.zeros(dimension))
++        self.register_buffer("variance", torch.ones(dimension))
++        self.register_buffer("count", torch.zeros((), dtype=torch.float64))
++
++    @torch.no_grad()
++    def update(self, values):
++        if values.ndim != 2 or values.shape[1] != self.mean.numel():
++            raise ValueError("观测统计输入必须为 [样本数, 单帧维度]")
++        if values.shape[0] == 0:
++            return
++        values = values.detach().to(self.mean)
++        if not bool(torch.isfinite(values).all()):
++            raise ValueError("观测统计输入包含 NaN/Inf")
++        batch_mean = values.mean(dim=0)
++        batch_variance = values.var(dim=0, unbiased=False)
++        batch_count = self.count.new_tensor(values.shape[0])
++        total = self.count + batch_count
++        ratio = (batch_count / total).to(self.mean.dtype)
++        delta = batch_mean - self.mean
++        self.variance.copy_(
++            (1.0 - ratio) * self.variance
++            + ratio * batch_variance
++            + ratio * (1.0 - ratio) * delta.square()
++        )
++        self.mean.add_(ratio * delta)
++        self.count.copy_(total)
++
++    def forward(self, values):
++        std = self.variance.clamp_min(self.minimum_std ** 2).sqrt()
++        return ((values - self.mean) / std).clamp(-self.clip, self.clip)
+ 
+ 
+ class Proprioception(nn.Module):
+@@ -46,6 +85,11 @@
+         self.output_dim = (
+             self.frame_dim * self.history_length
+         )
++        self.normalizer = ObservationNormalizer(self.frame_dim)
++
++    @torch.no_grad()
++    def update_normalization(self, real_states):
++        self.normalizer.update(self.frame(real_states))
+ 
+     def frame(self, state):
+         """
+@@ -132,5 +176,5 @@
+ 
+     def forward(self, history):
+         return self.flatten(
+-            self.from_states(history)
++            self.normalizer(self.from_states(history))
+         )
+--- a/source/x2_style_mimic/x2_style_mimic/algorithms/supermimic/world_model.py
++++ b/source/x2_style_mimic/x2_style_mimic/algorithms/supermimic/world_model.py
+@@ -103,13 +103,14 @@
+         ):
+             raise ValueError("输入维度和隐藏层宽度必须为正")
+ 
+-        # 原状态中的四元数4维替换为旋转6维。
+-        # 额外加入当前动作、当前处理后的目标和物理上下文。
++        # 动力学仅接收物理状态、实际执行目标、物理上下文。
++        # 历史动作仍留在状态中，但不输入动力学网络。
+         imput_dim = (
+-            self.spec.dim                   # 原状态维度
+-            + 2                             # 原状态中的四元数4维替换为旋转6维。
+-            + 2 * self.spec.num_actions     # 当前动作和目标
+-            + self.context_dim              # 物理上下文
++            15 + 2 * self.spec.num_joints
++            + self.spec.num_actions + self.context_dim
++        )
++        self.register_buffer(
++            "feature_version", torch.tensor(2, dtype=torch.long)
+         )
+ 
+         # 根位置增量3 + 旋转向量3 + 根速度增量6
+@@ -211,9 +212,6 @@
+                 s["root_velocity"],             # 根速度
+                 s["joint_position"],            # 关节位置
+                 s["joint_velocity"],            # 关节速度
+-                s["previous_action"],           # 上一步的动作
+-                s["previous_target"],           # 上一步的目标
+-                action,                         # 当前动作
+                 target,                         # 当前处理后的目标
+                 context,                        # 物理上下文
+             ),
+--- a/source/x2_style_mimic/x2_style_mimic/algorithms/supermimic/runner.py
++++ b/source/x2_style_mimic/x2_style_mimic/algorithms/supermimic/runner.py
+@@ -128,6 +128,11 @@
+         for _ in range(num_steps):
+             # 保存执行本步动作前的目标。
+             commands = self._read_commands()
++
++            # 每个真实控制步只统计当前帧，不重复统计历史展开帧。
++            self.trainer.proprioception.update_normalization(
++                self.history[:, -1]
++            )
+ 
+             observation = (
+                 self.trainer.proprioception(

@@ -18,12 +18,19 @@ class TorsoKinematics(nn.Module):
         return root_pose[:, None], root_velocity[:, None]
 
 
+class ContactGeometry(nn.Module):
+    def forward(self, states):
+        height = states[:, 2]
+        return torch.stack((height - .65, height - .65, height + .1,
+                            height + .1, height + .4, height + .4), dim=-1)
+
+
 class GetUpTests(unittest.TestCase):
     def setUp(self):
         self.spec = state.StateSpec(3, 2)
         self.cfg = head.GetupTaskCfg()
         self.task = head.GetupTask(self.spec, torch.tensor([[-1., 1.]] * 3), self.cfg,
-                                  TorsoKinematics(), torch.tensor([0, 2]))
+                                  TorsoKinematics(), torch.tensor([0, 2]), ContactGeometry())
         self.standing = torch.zeros(2, self.spec.dim)
         self.standing[:, 2], self.standing[:, 6] = 0.65, 1.
 
@@ -35,6 +42,37 @@ class GetUpTests(unittest.TestCase):
         self.assertLess(float(self.task.termination_probability(lying).max()), 1e-6)
         lying[0, 0] = 2.1
         self.assertEqual(self.task.terminated(lying).tolist(), [True, False])
+
+    def test_boundary_forward_is_hard_but_gradient_is_smooth(self):
+        states = self.standing.clone()
+        states[:, 0] = torch.tensor([1.9584, 2.01])
+        states.requires_grad_()
+        probability = self.task.termination_probability(states)
+        torch.testing.assert_close(probability, torch.tensor([0., 1.]), atol=0, rtol=0)
+        probability.sum().backward()
+        self.assertTrue(bool((states.grad[:, 0] > 0).all()))
+        self.assertTrue(bool(torch.isfinite(states.grad).all()))
+        _, terms = self.task.reward(states, torch.zeros(2, 2), states,
+                                    torch.empty(2, 0), torch.zeros(2))
+        torch.testing.assert_close(terms['out_of_bounds'], torch.tensor([0., -5.]), atol=0, rtol=0)
+
+    def test_head_proxy_has_no_positive_clearance_tail(self):
+        class Geometry(torch.nn.Module):
+            def forward(self, states):
+                return states[:, :6]
+        original = self.task.contact_geometry
+        self.task.contact_geometry = Geometry()
+        try:
+            states = self.standing.clone()
+            states[:, 4:6] = torch.tensor([[.01, .001], [-.0025, -.005]])
+            states.requires_grad_()
+            cost = self.task.head_contact_cost(states)
+            torch.testing.assert_close(cost, torch.tensor([0., 1.5]))
+            cost.sum().backward()
+            self.assertLess(float(states.grad[1, 4]), 0.)
+            self.assertTrue(bool(torch.isfinite(states.grad).all()))
+        finally:
+            self.task.contact_geometry = original
 
     def test_standing_quality_and_height_gradient(self):
         low = self.standing.clone()
@@ -72,7 +110,7 @@ class GetUpTests(unittest.TestCase):
         trainer.critic = networks.GoalConditionedCritic(self.spec.dim, 2, 0)
         trainer.critic_optimizer = torch.optim.Adam(trainer.critic.parameters(), lr=1e-3)
         trajectory = SimpleNamespace(states=self.standing[None].expand(4, -1, -1),
-                                     goals=torch.empty(4, 2, 0), rewards=torch.ones(3, 2),
+                                     goals=torch.empty(4, 2, 0), task_contexts=torch.empty(4, 2, 0), rewards=torch.ones(3, 2),
                                      termination_probabilities=torch.zeros(3, 2))
         metrics = trainer.update_critic(trajectory, torch.zeros(2, 2))
         self.assertGreater(metrics['critic_gradient_norm'], 0)

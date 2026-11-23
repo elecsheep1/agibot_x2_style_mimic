@@ -323,7 +323,8 @@ class GetUpRewardsCfg:
 
     action_rate = RewTerm(
         func=mdp.action_rate_l2,
-        weight=-0.005,
+        weight=-0.010,
+        # weight=-0.005,
     )
 
     joint_pos_limits = RewTerm(

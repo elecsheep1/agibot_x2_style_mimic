@@ -19,9 +19,6 @@ def main():
     cfg = X2SuperMimicGetupEnvCfg()
     cfg.scene.num_envs = 2
     cfg.episode_length_s = 0.12
-    # 专门覆盖非零辅助采集，不改变正式训练配置。
-    cfg.assist_zero_probability = 0.0
-    cfg.assist_curriculum_enabled = False
     with launch_simulation(cfg, args):
         import torch
         import omni.usd
@@ -43,9 +40,6 @@ def main():
                 assert all(omni.usd.get_context().get_stage().GetPrimAtPath(path).HasAPI(UsdPhysics.RigidBodyAPI)
                            for path in resolved_bodies[name])
             resets = 0
-            minimum_updates = cfg.decimation
-            nonzero_assist_steps = 0
-            push_events = 0
             for _ in range(18):
                 before = env.read_world_state()
                 before_steps = env.episode_length_buf.clone()
@@ -55,29 +49,12 @@ def main():
                 torch.testing.assert_close(captured['reward'], reward)
                 assert torch.isfinite(captured['next_state']).all()
                 assert torch.equal(terminated | truncated, env._wm_terminal_mask)
-                assert captured['schema_version'] == 2
+                assert captured['schema_version'] == 4
                 torch.testing.assert_close(captured['task_memory']['episode_steps'], before_steps)
                 torch.testing.assert_close(captured['next_task_memory']['episode_steps'], before_steps + 1)
-                force = extras['getup_progress']['assist_applied_force_n']
-                torch.testing.assert_close(captured['assist_wrench_w'][:, 2], force)
-                nonzero_assist_steps += int((force > 0).sum())
-                assert captured['contact_targets']['ground_force_peak_n'].shape == (2, 6)
-                assert (captured['contact_targets']['ground_force_peak_n'] >= 0).all()
-                torch.testing.assert_close(captured['contact_targets']['self_contact_cost'],
-                                           extras['self_contact']['penalty_raw'])
-                torch.testing.assert_close(captured['reward_state'][:, 7:13],
-                    captured['next_state'][:, 7:13] - captured['interval_delta_velocity_w'])
-                done = terminated | truncated
-                assert not captured['interval_push_mask'][done].any()
-                push_events += int(captured['interval_push_mask'].sum())
-                updates = extras['self_contact']['updates_per_control_step']
-                assert (updates == cfg.decimation).all()
-                minimum_updates = min(minimum_updates, float(updates.min()))
                 resets += int((terminated | truncated).sum())
             assert resets > 0
-            assert nonzero_assist_steps > 0
-            report = dict(automatic_resets=resets, self_contact_updates=minimum_updates,
-                          nonzero_assist_samples=nonzero_assist_steps, push_events=push_events,
+            report = dict(automatic_resets=resets,
                           sensor_matches=sensor_matches, resolved_bodies=resolved_bodies)
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2))

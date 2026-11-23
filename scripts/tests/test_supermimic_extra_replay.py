@@ -48,7 +48,6 @@ class ExtraReplayTests(unittest.TestCase):
         torch.testing.assert_close(batch['next_task_memory']['hold_steps'], expected + 1)
         self.assertFalse(batch['truncated'][:, :-1].any())
         self.assertTrue(batch['truncated'][:, -1].any())
-        self.assertEqual(batch['contact_targets']['ground_force_peak_n'].shape, (128, 3, 6))
 
     def test_bad_extra_field_never_changes_buffer_or_counters(self):
         replay = self.make_buffer()
@@ -61,9 +60,9 @@ class ExtraReplayTests(unittest.TestCase):
             elif kind == 'dtype':
                 row['task_memory']['hold_steps'] = torch.zeros(2)
             elif kind == 'shape':
-                row['assist_wrench_w'] = torch.zeros(2, 5)
+                row['amp_reward_gate'] = torch.zeros(2, 5)
             else:
-                row['assist_wrench_w'][0, 0] = float('nan')
+                row['amp_reward_gate'][0] = float('nan')
             with self.assertRaises(ValueError):
                 replay.add(row)
             self.assertEqual(replay.total_steps, 1)

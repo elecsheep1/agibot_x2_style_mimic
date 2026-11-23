@@ -1,4 +1,5 @@
 """起身实验调度：组装现有算法，执行预热、联合训练、评估和保存。"""
+import ast
 import hashlib
 from pathlib import Path
 
@@ -18,10 +19,20 @@ def file_hashes(paths):
     }
 
 
+def semantic_file_hashes(paths):
+    """忽略注释及格式；保留代码、常量和文档字符串变化。"""
+    return {
+        str(Path(path).resolve()): hashlib.sha256(
+            ast.dump(ast.parse(Path(path).read_text()), include_attributes=False).encode()
+        ).hexdigest()
+        for path in sorted(paths, key=str)
+    }
+
+
 class GetupTrainingRun:
     """实验层 runner；网络更新仍由 source 中已有 runner/trainer 完成。"""
 
-    def __init__(self, runtime, cfg, checkpoint, source_before):
+    def __init__(self, runtime, cfg, checkpoint, source_before, source_semantic_before=None):
         self.runtime = runtime
         self.cfg = cfg
         self.checkpoint = checkpoint
@@ -29,6 +40,7 @@ class GetupTrainingRun:
         if self.start >= cfg.iterations:
             raise ValueError('目标总轮数必须大于保存的轮数')
         self.source_before = source_before
+        self.source_semantic_before = source_semantic_before
         self.cohort = build_cohort(runtime, cfg.eval_seed)
         self.metadata = self._metadata()
         self.logger = None
@@ -47,6 +59,7 @@ class GetupTrainingRun:
             **runtime.metadata,
             input_sha256=file_hashes(inputs),
             source_code_sha256=self.source_before,
+            source_semantic_sha256=self.source_semantic_before,
             evaluation_seed=cfg.eval_seed,
             evaluation_seconds=cfg.eval_seconds,
             training_schedule={
@@ -59,11 +72,17 @@ class GetupTrainingRun:
     def _check_resume(self):
         saved = self.checkpoint
         for key in (
-            'input_sha256', 'source_code_sha256', 'action_noise', 'world_horizons',
+            'input_sha256', 'action_noise', 'world_horizons',
             'offline_world_fraction', 'evaluation_seed', 'evaluation_seconds', 'training_schedule',
         ):
             if saved['metadata'][key] != self.metadata[key]:
                 raise ValueError(f'恢复训练的配置或输入已改变：{key}')
+        saved_semantics = saved['metadata'].get('source_semantic_sha256')
+        if saved_semantics is not None and self.source_semantic_before is not None:
+            if saved_semantics != self.source_semantic_before:
+                raise ValueError('恢复训练的 source 代码逻辑已改变')
+        elif saved['metadata']['source_code_sha256'] != self.source_before:
+            raise ValueError('旧检查点没有语义摘要，无法确认 source 变更是否仅为注释；拒绝直接恢复')
         for key in ('motion_ids', 'frame_ids', 'birth_types'):
             torch.testing.assert_close(
                 self.cohort[key], saved['cohort'][key].to(self.runtime.env.device), atol=0, rtol=0,
@@ -123,11 +142,27 @@ class GetupTrainingRun:
 
     def _finish(self):
         after = file_hashes((PROJECT / 'source').rglob('*.py'))
-        if after != self.source_before:
-            raise RuntimeError('运行期间 source 文件发生了改变，请核对修改来源')
+        byte_identical = after == self.source_before
+        semantics_identical = byte_identical
+        if not byte_identical:
+            changed = sorted(name for name in set(after) | set(self.source_before)
+                             if after.get(name) != self.source_before.get(name))
+            semantic_error = None
+            try:
+                semantics_identical = (self.source_semantic_before is not None and
+                    semantic_file_hashes((PROJECT / 'source').rglob('*.py')) == self.source_semantic_before)
+            except (SyntaxError, OSError) as exc:
+                semantic_error = str(exc)
+            self.logger.write_json('source_changes.json', dict(
+                files=changed, semantics_unchanged=semantics_identical, error=semantic_error))
+            self.logger.flush()
+            if not semantics_identical:
+                raise RuntimeError(f'运行期间 source 代码逻辑发生变化，检查点已保存；详见 source_changes.json：{changed}')
+            print('[源码检查] 仅注释或格式变化，代码语义未变；已记录 source_changes.json', flush=True)
         self.logger.write_json('summary.json', dict(
             completed_iterations=self.cfg.iterations,
-            formal_source_unchanged=True,
+            formal_source_unchanged=byte_identical,
+            formal_source_semantics_unchanged=semantics_identical,
             total_training_transitions=self.runtime.runner.total_env_steps * self.runtime.env.num_envs,
             replay_steps=self.runtime.replay.total_steps,
             output=str(self.cfg.output),

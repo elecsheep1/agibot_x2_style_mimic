@@ -11,19 +11,21 @@ from .x2_getup_env_cfg import (
 class X2SuperMimicEnvCfg(
     X2MultiMotionGetUpEnvCfg
 ):
-    """继承原起身任务，不另行覆盖任务设置。
+    """无辅助力、无外部速度推扰的 SuperMimic 起身环境。"""
 
-    保留原配置的：
-    - 机器人与接触传感器
-    - 动作处理
-    - 全部真实任务奖励
-    - 出生分布和状态库
-    - 物理随机化与站立推扰
-    - 观测噪声
-    - 辅助课程
-    - 终止条件与成功判据
+    def __post_init__(self):
+        super().__post_init__()
 
-    环境数量、设备和随机种子由训练入口设置。
-    """
+        # 不施加训练中的随机速度跳变。
+        self.events.standing_perturbation = None
 
-    pass
+        # 不使用自碰撞奖励和专用自接触传感器。
+        # 机器人资产中的物理自碰撞继续保留。
+        self.rewards.self_contact = None
+        self.scene.self_contact = None
+
+        # 覆盖继承配置，避免辅助课程被其他入口意外启用。
+        self.assist_force_levels = (0.0,)
+        self.assist_initial_stage = 0
+        self.assist_zero_probability = 1.0
+        self.assist_curriculum_enabled = False

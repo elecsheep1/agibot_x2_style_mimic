@@ -24,18 +24,20 @@ class EntryConfigTests(unittest.TestCase):
             text = text.replace('gamma: float = 0.99', 'gamma: float = 0.91')
             text = text.replace('learning_rate: float = 1e-4', 'learning_rate: float = 3e-5')
             text = text.replace('critic_epochs: int = 5', 'critic_epochs: int = 2')
+            text = text.replace('        2048,', '        384,').replace('        512,', '        384,')
             path.write_text(text)
             with patch.object(config, 'DEFAULT_CONFIG', path):
                 cfg, _ = config.parse_config([])
                 self.assertEqual(cfg.gamma, .91)
                 self.assertEqual(cfg.discriminator_lr, 3e-5)
                 self.assertEqual(cfg.critic_epochs, 2)
+                self.assertEqual(cfg.world_hidden_dims, (384, 384, 384))
                 override, _ = config.parse_config(['--gamma', '.95'])
                 self.assertEqual(override.gamma, .95)
 
     def test_default_recipe_matches_previous_explicit_command(self):
         cfg, _ = config.parse_config([])
-        expected = dict(world_model_scratch=True, world_hidden_dims=(512, 512, 512), offline_world_fraction=0.,
+        expected = dict(world_model_scratch=True, offline_world_fraction=0.,
                         num_envs=16, iterations=200, batch_size=128, world_horizons=(8,), imagination_horizon=32,
                         warmup_steps=512, warmup_updates=500, warmup_collect_interval=50,
                         eval_interval=50, checkpoint_interval=50, eval_seconds=20., seed=43,
@@ -78,6 +80,8 @@ class EntryConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '未知字段'):
             config.GetupTrainConfig.from_mapping({'world_horzon': 8})
 
+
+
     def test_wrong_field_type_is_rejected(self):
         with self.assertRaises(ValueError):
             config.GetupTrainConfig.from_mapping({'num_envs': '16'})
@@ -88,7 +92,7 @@ class EntryConfigTests(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             config.parse_config(['--world-model-scratch', '--resume', 'latest.pt'])
 
-    def test_legacy_explicit_command_resolves_to_same_recipe(self):
+    def test_legacy_explicit_command_preserves_capacity_override(self):
         cfg, _ = config.parse_config([
             '--world-model-scratch', '--world-hidden-dims', '512', '512', '512',
             '--offline-world-fraction', '0', '--num-envs', '16', '--iterations', '200',
@@ -97,7 +101,9 @@ class EntryConfigTests(unittest.TestCase):
             '--eval-interval', '50', '--checkpoint-interval', '50', '--eval-seconds', '20',
             '--seed', '43', '--device', 'cuda:0', '--viz', 'none',
         ])
-        self.assertEqual(cfg.to_dict(), config.read_config(config.DEFAULT_CONFIG).to_dict())
+        expected = config.read_config(config.DEFAULT_CONFIG).to_dict()
+        expected['world_hidden_dims'] = [512, 512, 512]
+        self.assertEqual(cfg.to_dict(), expected)
 
 
 if __name__ == '__main__':

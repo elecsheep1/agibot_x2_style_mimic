@@ -5,7 +5,8 @@ from typing import Any
 
 import torch
 
-from getup_data import OfflineWorldReplay, read_world_checkpoint, shared_vector
+from getup_data import OfflineWorldReplay, read_world_checkpoint, shared_vector, action_bounds_from_calibration
+from contact_assets import build_contact_geometry, contact_geometry_contract, validate_geometry_checkpoint
 
 
 @dataclass
@@ -30,11 +31,23 @@ def tensor(value):
     return value.torch if hasattr(value, 'torch') else value
 
 
+def extend_task_memory_fields(fields, memory, num_envs):
+    """按真实任务记忆注册当前／下一步字段，避免遗漏新增状态。"""
+    result = dict(fields)
+    for name, value in memory.items():
+        if not isinstance(value, torch.Tensor) or value.ndim < 1 or value.shape[0] != num_envs:
+            raise ValueError(f'任务记忆必须包含环境维 [N,...]：{name}')
+        spec = (tuple(value.shape[1:]), value.dtype)
+        for group in ('task_memory', 'next_task_memory'):
+            path = (group, name)
+            if path in result and result[path] != spec:
+                raise ValueError(f'任务记忆注册与实际张量不一致：{path}')
+            result[path] = spec
+    return result
 def build_runtime(env, args, resume):
     from x2_style_mimic.assets.x2_ultra_cfg import X2_ULTRA_USD
     from x2_style_mimic.tasks.manager_based.x2_style_mimic.mdp.motion_dataset import MotionDataset
-    from x2_style_mimic.tasks.manager_based.x2_style_mimic.mdp.supermimic.transition_data import transition_extra_fields
-    from x2_style_mimic.tasks.manager_based.x2_style_mimic.mdp.supermimic.assistance import HeightAssistanceCfg
+    from x2_style_mimic.tasks.manager_based.x2_style_mimic.mdp.supermimic.transition_data import transition_extra_fields, read_task_memory
     from x2_style_mimic.algorithms.amp.discriminator import AMPWindowDiscriminator
     from x2_style_mimic.algorithms.supermimic.actor_critic import GoalConditionedActor, GoalConditionedCritic
     from x2_style_mimic.algorithms.supermimic.amp_features import DifferentiableAMPFeatures
@@ -47,6 +60,9 @@ def build_runtime(env, args, resume):
     from x2_style_mimic.algorithms.supermimic.trainer import SuperMimicTrainer, TrainerCfg
     from x2_style_mimic.algorithms.supermimic.world_model import TargetLimiter, WorldModel
 
+    dynamics_mode = getattr(WorldModel, 'DYNAMICS_MODE', 'independent_delta_v1')
+    if resume is not None and resume['metadata'].get('dynamics_mode', 'independent_delta_v1') != dynamics_mode:
+        raise ValueError('动力学结构已改变，旧检查点不能直接续训；请从头训练新结构')
     env.reset()
     device, spec, robot = env.device, env.world_state_spec, env.scene['robot']
     context, context_spec = read_sim_context(env)
@@ -68,6 +84,11 @@ def build_runtime(env, args, resume):
     else:
         if resume.get('kind') != 'supermimic_getup_training':
             raise ValueError('resume 必须指向本训练入口保存的 checkpoint')
+        if (resume['metadata'].get('transition_schema_version') != 4
+                or resume['metadata'].get('contact_mode') != 'geometry_proxy'):
+            raise ValueError('旧检查点使用辅助力或接触预测结构，请使用新配置重新训练')
+        if resume['metadata'].get('actor_action_mode') != 'bounded_joint_range_v1':
+            raise ValueError('旧检查点使用无界 actor，请按修正后的动作与奖励配置从头训练')
         for key, value in expected.items():
             if resume['metadata'].get(key) != value:
                 raise ValueError(f'恢复训练的元信息不兼容：{key}')
@@ -88,15 +109,25 @@ def build_runtime(env, args, resume):
         torch.cat(reference.amp_states), num_steps=5, **discriminator_cfg,
     ).to(device)
     style = DifferentiableStyleReward(discriminator).to(device)
-    actor = GoalConditionedActor(proprio.output_dim, 0, spec.num_actions).to(device)
-    critic = GoalConditionedCritic(spec.dim, context.shape[-1], 0).to(device)
-    world = WorldModel(spec, context.shape[-1], TargetLimiter(**calibration).to(device), hidden_dims).to(device)
+    action_lower, action_upper = action_bounds_from_calibration(calibration)
+    actor = GoalConditionedActor(proprio.output_dim, 0, spec.num_actions,
+                                 action_lower=action_lower, action_upper=action_upper).to(device)
+    critic = GoalConditionedCritic(
+        spec.dim, context.shape[-1], 0,
+    ).to(device)
+    world_timing = (dict(dt=env.step_dt, decimation=env.cfg.decimation)
+                    if dynamics_mode == 'gencoord_integrated_v1' else {})
+    world = WorldModel(spec, context.shape[-1], TargetLimiter(**calibration).to(device),
+                       hidden_dims, **world_timing).to(device)
     if resume is None and initial is not None:
         if initial['model']['input_mean'].shape != world.input_mean.shape:
             raise ValueError('预训练世界模型输入维度不匹配；请使用新输入结构的检查点，或选择 --world-model-scratch')
         world.load_state_dict(initial['model'], strict=True)
     task_cfg = GetupTaskCfg(**env.cfg.getup_task)
-    task = GetupTask(spec, limits[0], task_cfg, features.kinematics, ids).to(device)
+    contact_geometry = build_contact_geometry(spec, args.urdf, X2_ULTRA_USD, list(robot.joint_names)).to(device)
+    geometry_contract = contact_geometry_contract(contact_geometry)
+    task = GetupTask(spec, limits[0], task_cfg, features.kinematics, ids,
+                     contact_geometry=contact_geometry).to(device)
     trainer_cfg = TrainerCfg(horizon=args.imagination_horizon, world_learning_rate=args.world_lr,
                              actor_learning_rate=args.actor_lr, critic_learning_rate=args.critic_lr,
                              gamma=args.gamma, lam=args.lam, gradient_norm=args.gradient_norm,
@@ -105,6 +136,7 @@ def build_runtime(env, args, resume):
     modules = dict(actor=actor, critic=critic, world_model=world, proprioception=proprio,
                    amp_features=features, style=style, task=task)
     if resume is not None:
+        validate_geometry_checkpoint(resume, geometry_contract)
         saved_discriminator_cfg = resume['metadata'].get('discriminator_cfg')
         if saved_discriminator_cfg is not None and saved_discriminator_cfg != discriminator_cfg:
             raise ValueError('恢复训练的判别器配置不一致')
@@ -112,14 +144,11 @@ def build_runtime(env, args, resume):
             if resume['metadata'][key] != value:
                 raise ValueError(f'恢复训练配置不一致：{key}')
         for name, module in modules.items():
+            if name not in resume['modules']:
+                raise ValueError(f'检查点缺少模块 {name}，不能直接恢复这一版本的训练')
             module.load_state_dict(resume['modules'][name], strict=True)
-    assistance_cfg = HeightAssistanceCfg(
-        full_below_height=env.cfg.assist_full_below_height,
-        zero_above_height=env.cfg.assist_zero_above_height,
-    )
     trainer = SuperMimicTrainer(
         actor, critic, world, proprio, features, style, task, trainer_cfg,
-        assistance_cfg=assistance_cfg,
     )
     optimizers = dict(world=trainer.world_optimizer, actor=trainer.actor_optimizer,
                       critic=trainer.critic_optimizer, discriminator=discriminator.optimizer)
@@ -130,9 +159,11 @@ def build_runtime(env, args, resume):
     statistics_required = (resume is not None and warmup_complete) or (resume is None and not args.world_model_scratch)
     if statistics_required and not bool(world.stats_ready):
         raise ValueError('已预热或预训练的世界模型缺少输入统计量')
+    memory = read_task_memory(env)
+    extra_fields = extend_task_memory_fields(transition_extra_fields(spec.dim), memory, env.num_envs)
     replay = SequenceReplayBuffer(env.num_envs, args.replay_steps, spec.dim, spec.num_actions,
                                   context, device=device, command_dim=0,
-                                  extra_fields=transition_extra_fields(spec.dim))
+                                  extra_fields=extra_fields)
     runner = SuperMimicRunner(env, trainer, replay, None, action_noise_std=args.action_noise)
     if resume is not None:
         runner.total_env_steps = int(resume['total_env_steps'])
@@ -148,7 +179,13 @@ def build_runtime(env, args, resume):
     metadata['initialization_mode'] = (resume['metadata'].get('initialization_mode', 'pretrained') if resume is not None
                                        else 'scratch' if args.world_model_scratch else 'pretrained')
     metadata['discriminator_cfg'] = discriminator_cfg
-    metadata['assistance_cfg'] = asdict(assistance_cfg)
+    metadata['transition_schema_version'] = getattr(env, 'transition_schema_version', 2)
+    metadata['contact_mode'] = 'geometry_proxy'
+    metadata['actor_action_mode'] = 'bounded_joint_range_v1'
+    metadata['dynamics_mode'] = dynamics_mode
+    metadata['contact_geometry_contract'] = geometry_contract
+    metadata['task_memory_spec'] = {name: dict(shape=list(value.shape[1:]), dtype=str(value.dtype))
+                                  for name, value in memory.items()}
     return GetupRuntime(env=env, trainer=trainer, runner=runner, replay=replay, offline=offline,
                             warmup_complete=warmup_complete,
                             modules=modules, optimizers=optimizers, context=context, metadata=metadata,

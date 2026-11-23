@@ -100,7 +100,11 @@ def main():
             proprio = Proprioception(spec, ids, tensor(robot.data.default_joint_pos)[0, ids],
                                     tensor(robot.data.default_joint_vel)[0, ids], history_length=5).to(device)
             proprio.load_state_dict(actor_checkpoint['modules']['proprioception'], strict=True)
-            actor = GoalConditionedActor(proprio.output_dim, 0, spec.num_actions).to(device)
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'supermimic'))
+            from getup_data import action_bounds_from_calibration
+            action_lower, action_upper = action_bounds_from_calibration(values)
+            actor = GoalConditionedActor(proprio.output_dim, 0, spec.num_actions,
+                                         action_lower=action_lower, action_upper=action_upper).to(device)
             actor.load_state_dict(actor_checkpoint['modules']['actor'], strict=True)
             actor.eval()
             replay = SequenceReplayBuffer(env.num_envs, args.collection_steps, spec.dim, spec.num_actions,

@@ -28,8 +28,6 @@ def imagine(
     history,
     context,
     goals,
-    task_memory,
-    assistance_cfg,
     horizon=32,
 ):
     """
@@ -114,13 +112,11 @@ def imagine(
 
     imagined_env = ImaginedGetupEnv(
         world_model=world_model,
-        assistance_cfg=assistance_cfg,
     )
 
     current = imagined_env.reset(
         initial_state=current,
         context=context,
-        task_memory=task_memory,
     )
 
     states = [current]

@@ -122,7 +122,11 @@ def main(task_name='velocity'):
             style = DifferentiableStyleReward(discriminator).to(device)
             goal_dim = 0 if task_name == 'getup' else 3
             command_name = None if task_name == 'getup' else 'base_velocity'
-            actor = GoalConditionedActor(proprio.output_dim, goal_dim, spec.num_actions).to(device)
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'supermimic'))
+            from getup_data import action_bounds_from_calibration
+            action_lower, action_upper = action_bounds_from_calibration(values)
+            actor = GoalConditionedActor(proprio.output_dim, goal_dim, spec.num_actions,
+                                         action_lower=action_lower, action_upper=action_upper).to(device)
             critic = GoalConditionedCritic(spec.dim, context.shape[-1], goal_dim).to(device)
             world_checkpoint = None
             hidden_dims = (256, 256, 256)
@@ -141,8 +145,11 @@ def main(task_name='velocity'):
             trainer_cfg = TrainerCfg(horizon=args.imagination_horizon)
             if task_name == 'getup':
                 from x2_style_mimic.algorithms.supermimic.heads import GetupTask, GetupTaskCfg
+                sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'supermimic'))
+                from contact_assets import build_contact_geometry
                 task_cfg = GetupTaskCfg(**cfg.getup_task)
-                task = GetupTask(spec, limits[0], task_cfg, features.kinematics, ids).to(device)
+                geometry = build_contact_geometry(spec, args.urdf, X2_ULTRA_USD, list(robot.joint_names)).to(device)
+                task = GetupTask(spec, limits[0], task_cfg, features.kinematics, ids, geometry).to(device)
             else:
                 task_cfg = VelocityTaskCfg(**cfg.velocity_task)
                 task = VelocityTask(spec, limits[0], task_cfg).to(device)

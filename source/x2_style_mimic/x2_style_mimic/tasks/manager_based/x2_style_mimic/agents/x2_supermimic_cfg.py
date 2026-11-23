@@ -8,9 +8,9 @@ class SuperMimicWorldModelCfg:
     """世界模型结构与监督训练。"""
 
     hidden_dims: tuple[int, ...] = (
-        512,
-        512,
-        512,
+        2048,
+        2048,
+        2048,
     )
 
     # 连续真实转移的监督窗口。
@@ -19,6 +19,8 @@ class SuperMimicWorldModelCfg:
 
     updates_per_iteration: int = 10
     learning_rate: float = 2e-4
+
+
 
 
 @configclass

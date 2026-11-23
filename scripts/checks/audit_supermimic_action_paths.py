@@ -40,7 +40,10 @@ def main():
         p = modules['proprioception']
         proprio = observations.Proprioception(spec, p['joint_ids'], p['default_joint_position'], p['default_joint_velocity'])
         proprio.load_state_dict(p)
-        actor = actors.GoalConditionedActor(proprio.output_dim, 0, spec.num_actions)
+        if not {'action_lower', 'action_upper'}.issubset(modules['actor']):
+            raise ValueError('该检查点使用旧无界 actor；请使用对应版本的历史诊断，不按新动作边界解释旧策略')
+        actor = actors.GoalConditionedActor(proprio.output_dim, 0, spec.num_actions,
+            action_lower=modules['actor']['action_lower'], action_upper=modules['actor']['action_upper'])
         actor.load_state_dict(modules['actor'])
         w = modules['world_model']
         limiter = worlds.TargetLimiter(**{key: w['limiter.' + key] for key in ('offset', 'scale', 'lower', 'upper', 'max_delta')})

@@ -38,5 +38,11 @@ class X2SuperMimicGetupEnvCfg(X2SuperMimicEnvCfg):
             # 越界距离与可微过渡宽度，单位米。
             max_distance=2.0,
             boundary_transition=0.1,
+
+            contact_distance=0.005,
+            contact_transition=0.005,
+            head_contact_weight=2.0,
+            head_contact_distance=0.0,
+            head_contact_transition=0.005,
         )
     )

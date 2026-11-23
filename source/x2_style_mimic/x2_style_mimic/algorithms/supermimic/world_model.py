@@ -113,7 +113,6 @@ class WorldModel(nn.Module):
             + 2 * self.spec.num_joints
             + self.spec.num_actions
             + self.context_dim
-            + 6     # 世界坐标下作用于 torso 质心的力／力矩。
         )
 
         # 根位置增量3 + 旋转向量3 + 根速度增量6
@@ -186,7 +185,6 @@ class WorldModel(nn.Module):
         state,
         action,
         context,
-        assist_wrench_w,
     ):
         """
         拆分状态
@@ -207,16 +205,6 @@ class WorldModel(nn.Module):
             batch_size, self.context_dim
         ):
             raise ValueError("context 形状错误")
-        if assist_wrench_w.shape != (
-            batch_size, 6
-        ):
-            raise ValueError("assist_wrench_w 必须为 [B, 6]")
-        if not bool(
-            torch.isfinite(assist_wrench_w).all()
-        ):
-            raise ValueError("辅助力包含 NaN/Inf")
-        if assist_wrench_w.device != state.device:
-            raise ValueError("辅助力与物理状态必须在同一设备")
 
         # 对应TargetLimiter的forward方法，计算新的目标。
         target = self.limiter(
@@ -233,7 +221,6 @@ class WorldModel(nn.Module):
                 s["joint_velocity"],            # 关节速度
                 target,                         # 当前处理后的目标
                 context,                        # 物理上下文
-                assist_wrench_w,                # 世界坐标下作用于 torso 质心的力／力矩。
             ),
             dim=-1,
         )
@@ -248,12 +235,8 @@ class WorldModel(nn.Module):
         states = batch["states"]
         actions = batch["actions"]
         contexts = batch["context"]
-        assist_wrench_w = batch["assist_wrench_w"]
         # actions.shape == (批量大小, 序列长度, 单步动作维度)
         batch_size, horizon, _ = actions.shape
-        if assist_wrench_w.shape != (batch_size, horizon, 6):
-            raise ValueError("辅助力监督必须为 [B, H, 6]")
-
         features, _ = self.features(
             # 指定第一维：序列数量 × 时间步数，第二维由 PyTorch 根据元素总数自动计算
             # buffer 的 states 有 H+1 帧，但动作只有 H 步。计算输入统计量时，应取每个动作执行前的状态，排除最后一帧。
@@ -261,7 +244,6 @@ class WorldModel(nn.Module):
             action=actions.reshape(batch_size * horizon, -1),
             # 把上下文扩展到每个时间步，再展开成与状态、动作对应的二维输入。None 表示在这里新增一个维度，作为时间维。
             context=contexts[:, None].expand(-1, horizon, -1).reshape(batch_size * horizon, -1),
-            assist_wrench_w=assist_wrench_w.reshape(batch_size * horizon, 6),
         )
 
         if not bool(torch.isfinite(features).all()):
@@ -283,7 +265,6 @@ class WorldModel(nn.Module):
         state,
         action,
         context,
-        assist_wrench_w,
         ):
         """
         从状态向量里提取特征然后归一化
@@ -298,7 +279,6 @@ class WorldModel(nn.Module):
             state=state,
             action=action,
             context=context,
-            assist_wrench_w=assist_wrench_w,
         )
         normalized = (features - self.input_mean) / self.input_std
 
@@ -377,108 +357,6 @@ def rollout_logged_actions(
 
     return torch.stack(states, dim=1)
 
-def rollout_conditioned_actions(
-    model,
-    initial_state,
-    actions,
-    context,
-    assist_wrenches_w,
-    interval_delta_velocities_w,
-):
-    """按真实动作、辅助力和步末事件自回归预测。
-
-    网络预测物理积分后的状态；
-    速度推扰作为独立事件，在物理预测后施加。
-
-    physics_states: [B, H+1, Ds]
-    states: [B, H+1, Ds]
-    """
-
-    if (
-        actions.ndim != 3
-        or actions.shape[1] < 1
-    ):
-        raise ValueError("actions 必须为非空 [B, H, A]")
-
-    batch_size, horizon, _ = actions.shape
-    expected_shape = (
-        batch_size,
-        horizon,
-        6,
-    )
-
-    for name, value in (
-        (
-            "assist_wrenches_w",
-            assist_wrenches_w,
-        ),
-        (
-            "interval_delta_velocities_w",
-            interval_delta_velocities_w,
-        ),
-    ):
-        if value.shape != expected_shape:
-            raise ValueError(f"{name} 必须为 [B, H, 6]")
-
-        if not bool(
-            torch.isfinite(value).all()
-        ):
-            raise ValueError(f"{name} 包含 NaN/Inf")
-
-    current = initial_state
-    states = [current]
-    physics_states = [initial_state]
-
-    for step in range(horizon):
-        physical = model(
-            state=current,
-            action=actions[:, step],
-            context=context,
-            assist_wrench_w=(
-                assist_wrenches_w[:, step]
-            ),
-        )
-
-        physics_states.append(physical)
-
-        fields = unpack_state(
-            physical,
-            model.spec,
-        )
-
-        # 速度跳变属于事件，不让网络承担预测随机事件的责任。
-        current = pack_state(
-            root_pose=fields["root_pose"],
-            root_velocity=(
-                fields["root_velocity"]
-                + interval_delta_velocities_w[:, step]
-            ),
-            joint_position=(
-                fields["joint_position"]
-            ),
-            joint_velocity=(
-                fields["joint_velocity"]
-            ),
-            previous_action=(
-                fields["previous_action"]
-            ),
-            previous_target=(
-                fields["previous_target"]
-            ),
-        )
-
-        states.append(current)
-
-    return {
-        "states": torch.stack(
-            states,     # 初始状态 + 每步应用速度推扰后的状态。
-            dim=1,      # 沿时间维度堆叠
-        ),
-        "physics_states": torch.stack(
-            physics_states,     # 初始状态 + 每步物理预测后的状态。
-            dim=1,              # 沿时间维度堆叠
-        ),
-    }
 
 
 def dynamics_loss(

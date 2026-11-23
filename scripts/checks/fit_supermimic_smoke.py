@@ -152,8 +152,11 @@ def main():
     data = torch.load(args.data, map_location="cpu", weights_only=True)
     state, dynamics = load_modules()
     spec = state.StateSpec(**data["metadata"]["state_spec"])
+    timing = (dict(dt=data['metadata']['step_dt'], decimation=data['metadata']['decimation'])
+              if hasattr(dynamics.WorldModel, 'DYNAMICS_MODE') else {})
     model = dynamics.WorldModel(spec, data["contexts"].shape[-1],
-                               dynamics.TargetLimiter(**data["limiter"]), hidden_dims=tuple(args.hidden_dims)).to(args.device)
+                               dynamics.TargetLimiter(**data["limiter"]),
+                               hidden_dims=tuple(args.hidden_dims), **timing).to(args.device)
     # Split whole (environment, episode) keys BEFORE constructing windows or normalization.
     keys = torch.stack((torch.arange(data["episode_ids"].shape[1]).expand_as(data["episode_ids"]),
                         data["episode_ids"]), dim=-1)

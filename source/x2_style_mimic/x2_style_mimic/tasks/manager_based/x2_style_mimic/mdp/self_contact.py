@@ -363,6 +363,32 @@ class SelfContactSensor(SensorBase):
 
         self._updates.add_(mask.long())
 
+    @torch.no_grad()
+    def export_task_memory(self, env_ids=None):
+        """读取逐配对接触记忆，不更新采样或计时。"""
+        if not self.is_initialized:
+            raise RuntimeError("自接触传感器尚未初始化，无法读取任务记忆")
+
+        ids = (
+            slice(None)
+            if env_ids is None
+            else env_ids
+        )
+
+        return {
+            "self_contact_strong_duration": (
+                self.strong_duration[ids]
+                .detach()
+                .clone()
+            ),
+            "self_contact_strong_active": (
+                self._strong_active[ids]
+                .detach()
+                .clone()
+            ),
+        }
+
+
     def snapshot(self, env_ids=None):
         ids = slice(None) if env_ids is None else env_ids
 

@@ -166,6 +166,11 @@ class SuperMimicRunner:
             if not bool(torch.isfinite(action).all()):
                 raise RuntimeError("Actor 输出包含 NaN/Inf")
 
+            action = action.clamp(
+                min=self.trainer.actor.action_lower,
+                max=self.trainer.actor.action_upper,
+            )
+
             _, _ , _, _ , extras = self.env.step(action)
 
             # X2SuperMimicEnv 已捕获真实终止前状态。
@@ -182,19 +187,14 @@ class SuperMimicRunner:
             transition：所有并行环境在本控制步产生的转移数据。
             state：动作执行前的状态。
             action：本步执行的动作。
-            next_state：动作执行后的状态，包含本回合的 interval 推扰影响。
+            next_state：动作执行后的状态，包含真实终止前的物理状态。
             reward：环境任务奖励，不含算法侧额外计算的 AMP 奖励。
             terminated：是否触发任务终止条件。
             truncated：是否因时间限制等原因截断。
             commands：本步目标指令。
-            schema_version：转移数据格式版本，当前为 2。
+            schema_version：转移数据格式版本，当前为 4。
             task_memory：动作执行前的任务记忆。
             next_task_memory：动作执行后的任务记忆。
-            contact_targets：地面接触力历史峰值和自碰撞原始代价。
-            assist_wrench_w：世界坐标系下的辅助力和力矩。
-            interval_delta_velocity_w：interval 推扰引起的世界坐标系速度增量。
-            interval_push_mask：本步是否发生 interval 推扰。
-            reward_state：奖励计算对应的状态，即 interval 推扰前的状态。
             amp_reward_gate：AMP 风格奖励的缩放系数。
             amp_policy_sample_mask：是否允许作为 AMP 判别器的策略样本。
             对于本步结束的环境，下一状态及对应辅助数据保留重置前的旧回合数据。
@@ -430,7 +430,6 @@ class SuperMimicRunner:
                 history=policy_batch["history"],
                 context=policy_batch["context"],
                 goals=policy_batch["commands"],
-                task_memory=(policy_batch["task_memory"]),
             )
         )
 

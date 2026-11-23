@@ -48,8 +48,9 @@ class LoopTests(unittest.TestCase):
     def test_actor_backward_freezes_model_and_critic(self):
         context = torch.ones(2, 3)
         limiter = self.dynamics.TargetLimiter(torch.zeros(29), 0.25, -torch.ones(29), torch.ones(29), torch.full((29,), 0.1))
-        model = self.dynamics.WorldModel(self.spec, 3, limiter, hidden_dims=(16, 16))
-        model.fit_input_stats(dict(states=self.history, actions=torch.zeros(2, 4, 29), context=context, assist_wrench_w=torch.zeros(2, 4, 6)))
+        timing = dict(dt=.02, decimation=10) if hasattr(self.dynamics.WorldModel, 'DYNAMICS_MODE') else {}
+        model = self.dynamics.WorldModel(self.spec, 3, limiter, hidden_dims=(16, 16), **timing)
+        model.fit_input_stats(dict(states=self.history, actions=torch.zeros(2, 4, 29), context=context))
         actor = loop.ResidualActor(ZeroBasePolicy(), self.ids, torch.zeros(29), self.task_ids, self.spec, self.state)
         critic = nn.Linear(model.input_mean.numel() + 13, 1)
         goal = torch.full((2, 4), 0.08)
