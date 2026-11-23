@@ -53,6 +53,16 @@ def _patch_multimotion_reset() -> None:
     X2MultiMotionGetUpEnv._reset_idx = reset_idx_compat
 
 
+def _runner_config_compat(agent_cfg):
+    """Remove RSL-RL 5.0 model options removed by the Isaac Lab 3 package."""
+    runner_cfg = agent_cfg.to_dict()
+    for model_name in ("actor", "critic"):
+        model_cfg = runner_cfg.get(model_name)
+        if isinstance(model_cfg, dict) and model_cfg.pop("stochastic", None) is not None:
+            print(f"[compat] Removed legacy {model_name}.stochastic option")
+    return runner_cfg
+
+
 def main() -> None:
     args_cli, hydra_args = _parse_args()
     # Hydra only consumes task overrides such as env.rewards.* and agent.algorithm.*.
@@ -131,10 +141,11 @@ def main() -> None:
         print("[2/4] Resetting and wrapping RSL-RL environment")
         env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
         print("[3/4] Creating RSL-RL runner")
+        runner_cfg = _runner_config_compat(agent_cfg)
         if agent_cfg.class_name == "OnPolicyRunner":
-            runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
+            runner = OnPolicyRunner(env, runner_cfg, log_dir=log_dir, device=agent_cfg.device)
         elif agent_cfg.class_name == "DistillationRunner":
-            runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
+            runner = DistillationRunner(env, runner_cfg, log_dir=log_dir, device=agent_cfg.device)
         else:
             raise ValueError(f"Unsupported RSL-RL runner: {agent_cfg.class_name}")
 
