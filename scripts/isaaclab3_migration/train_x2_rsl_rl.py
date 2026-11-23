@@ -56,7 +56,7 @@ def _patch_multimotion_reset() -> None:
 
 def _runner_config_compat(agent_cfg):
     """Filter legacy model options against the installed RSL-RL model API."""
-    from rsl_rl.modules import MLPModel
+    from rsl_rl.models import MLPModel
 
     runner_cfg = agent_cfg.to_dict()
     accepted = set(inspect.signature(MLPModel.__init__).parameters)
