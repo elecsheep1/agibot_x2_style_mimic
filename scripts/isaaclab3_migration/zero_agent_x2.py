@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 
 import gymnasium as gym
 import torch
@@ -17,6 +18,9 @@ parser.add_argument("--disable_fabric", action="store_true")
 # AppLauncher supplies the standard ``--visualizer`` / ``--viz`` option.
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
+# ``resolve_task_config`` delegates to Hydra, which reads ``sys.argv`` again.
+# Launcher-only flags such as ``--viz`` must not be passed to Hydra.
+sys.argv = [sys.argv[0]]
 
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
