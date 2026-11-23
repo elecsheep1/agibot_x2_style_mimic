@@ -6,7 +6,6 @@ from __future__ import annotations
 import sys
 from functools import wraps
 
-import gymnasium as gym
 import torch
 
 # Register the project's Gym tasks before the unified CLI resolves ``--task``.
@@ -38,30 +37,29 @@ def _apply_x2_prone_compatibility(argv: list[str]) -> list[str]:
 
 
 def _patch_prone_reset_event() -> None:
-    """Adapt the legacy motion-reset callback to Isaac Lab 3 slice env IDs."""
-    from x2_style_mimic.tasks.manager_based.x2_style_mimic import x2_getup_env_cfg
-    from x2_style_mimic.tasks.manager_based.x2_style_mimic.mdp import getup
+    """Adapt the legacy MultiMotion environment to Isaac Lab 3 slice IDs."""
+    from x2_style_mimic.tasks.manager_based.x2_style_mimic.x2_getup_env import X2MultiMotionGetUpEnv
+    from x2_style_mimic.tasks.manager_based.x2_style_mimic.x2_supermimic_env import X2SuperMimicEnv
 
-    original = getup.reset_from_motion_dataset
-    if getattr(original, "_isaaclab3_slice_compatible", False):
-        return
+    def patch_reset_method(env_type) -> None:
+        original_reset_idx = env_type._reset_idx
+        if getattr(original_reset_idx, "_isaaclab3_slice_compatible", False):
+            return
 
-    @wraps(original)
-    def reset_from_motion_dataset_compat(env, env_ids, *args, **kwargs):
-        if isinstance(env_ids, slice):
-            env_ids = torch.arange(env.num_envs, device=env.device, dtype=torch.long)[env_ids]
-        return original(env, env_ids, *args, **kwargs)
+        @wraps(original_reset_idx)
+        def reset_idx_compat(self, env_ids):
+            if isinstance(env_ids, slice):
+                env_ids = torch.arange(self.num_envs, device=self.device, dtype=torch.long)[env_ids]
+            return original_reset_idx(self, env_ids)
 
-    reset_from_motion_dataset_compat._isaaclab3_slice_compatible = True
-    def make_compatible_cfg():
-        cfg = x2_getup_env_cfg.X2MultiMotionGetUpEnvCfg()
-        cfg.events.reset_from_reference.func = reset_from_motion_dataset_compat
-        return cfg
+        reset_idx_compat._isaaclab3_slice_compatible = True
+        env_type._reset_idx = reset_idx_compat
 
-    # ``configclass`` fields are instance-owned in Isaac Lab 3. Replacing the
-    # Gym registration's config factory lets the unified CLI receive a patched
-    # instance without mutating the original project configuration class.
-    gym.spec("X2-Prone-MultiMotion-v0").kwargs["env_cfg_entry_point"] = make_compatible_cfg
+    # Convert the initial all-environment slice at each outer reset boundary.
+    # This covers the motion dataset, assist controller, and terminal-state
+    # bookkeeping that were originally written for tensor-only environment IDs.
+    patch_reset_method(X2MultiMotionGetUpEnv)
+    patch_reset_method(X2SuperMimicEnv)
 
 
 def main() -> int | None:
