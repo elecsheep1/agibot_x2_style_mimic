@@ -58,8 +58,11 @@ def _runner_config_compat(agent_cfg):
     runner_cfg = agent_cfg.to_dict()
     for model_name in ("actor", "critic"):
         model_cfg = runner_cfg.get(model_name)
-        if isinstance(model_cfg, dict) and model_cfg.pop("stochastic", None) is not None:
-            print(f"[compat] Removed legacy {model_name}.stochastic option")
+        if not isinstance(model_cfg, dict):
+            continue
+        for option in ("stochastic", "init_noise_std"):
+            if model_cfg.pop(option, None) is not None:
+                print(f"[compat] Removed legacy {model_name}.{option} option")
     return runner_cfg
 
 
