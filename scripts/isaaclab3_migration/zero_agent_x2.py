@@ -13,11 +13,10 @@ from isaaclab.app import AppLauncher
 parser = argparse.ArgumentParser(description="X2 zero-action contact diagnostic for Isaac Lab 3.")
 parser.add_argument("--task", default="Template-X2-Style-Mimic-v0")
 parser.add_argument("--num_envs", type=int, default=1)
-parser.add_argument("--viz", choices=("kit", "none"), default="kit")
 parser.add_argument("--disable_fabric", action="store_true")
+# AppLauncher supplies the standard ``--visualizer`` / ``--viz`` option.
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
-args_cli.headless = args_cli.viz == "none"
 
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
@@ -53,7 +52,7 @@ def main() -> None:
         with torch.inference_mode():
             env.step(actions)
         steps += 1
-        if args_cli.viz == "none" and steps >= 100:
+        if args_cli.headless and steps >= 100:
             break
     env.close()
 
