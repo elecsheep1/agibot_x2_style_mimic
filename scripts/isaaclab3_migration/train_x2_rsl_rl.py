@@ -110,8 +110,10 @@ def main() -> None:
             log_dir += f"_{agent_cfg.run_name}"
         log_dir = os.path.join(log_root, log_dir)
         print(f"[INFO] Logging experiment in directory: {log_root}")
+        os.makedirs(os.path.join(log_dir, "params"), exist_ok=True)
         env_cfg.log_dir = log_dir
 
+        print("[1/4] Creating X2 environment")
         env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
         if isinstance(env.unwrapped.cfg, DirectMARLEnvCfg):
             env = multi_agent_to_single_agent(env)
@@ -125,7 +127,9 @@ def main() -> None:
             )
 
         start_time = time.time()
+        print("[2/4] Resetting and wrapping RSL-RL environment")
         env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
+        print("[3/4] Creating RSL-RL runner")
         if agent_cfg.class_name == "OnPolicyRunner":
             runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
         elif agent_cfg.class_name == "DistillationRunner":
@@ -135,6 +139,7 @@ def main() -> None:
 
         dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
         dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
+        print("[4/4] Starting training")
         runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
         print(f"Training time: {time.time() - start_time:.2f} seconds")
     finally:
