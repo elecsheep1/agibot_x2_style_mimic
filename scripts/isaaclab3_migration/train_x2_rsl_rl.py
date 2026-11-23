@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import sys
 
+import gymnasium as gym
 import torch
 
 # Register the project's Gym tasks before the unified CLI resolves ``--task``.
@@ -50,8 +51,15 @@ def _patch_prone_reset_event() -> None:
         return original(env, env_ids, *args, **kwargs)
 
     reset_from_motion_dataset_compat._isaaclab3_slice_compatible = True
-    x2_getup_env_cfg.GetUpEventsCfg.reset_from_reference.func = reset_from_motion_dataset_compat
-    x2_getup_env_cfg.X2MultiMotionGetUpEnvCfg.events.reset_from_reference.func = reset_from_motion_dataset_compat
+    def make_compatible_cfg():
+        cfg = x2_getup_env_cfg.X2MultiMotionGetUpEnvCfg()
+        cfg.events.reset_from_reference.func = reset_from_motion_dataset_compat
+        return cfg
+
+    # ``configclass`` fields are instance-owned in Isaac Lab 3. Replacing the
+    # Gym registration's config factory lets the unified CLI receive a patched
+    # instance without mutating the original project configuration class.
+    gym.spec("X2-Prone-MultiMotion-v0").kwargs["env_cfg_entry_point"] = make_compatible_cfg
 
 
 def main() -> int | None:
