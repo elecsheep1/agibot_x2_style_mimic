@@ -493,18 +493,18 @@ def standing_quality(
 ):
     """有界站立质量，输出范围约为 [0, 1]。"""
 
-    # ------------------------------- 高度指标 ------------------------------
-    # 从低位到站立高度提供连续反馈。
-    height_progress = (
-        (height - 0.08) / (0.63 - 0.08)     # 高度范围从 0.08 到 0.63 米
-    ).clamp(0.0, 1.0)
+    # # ------------------------------- 高度指标 ------------------------------
+    # # 从低位到站立高度提供连续反馈。
+    # height_progress = (
+    #     (height - 0.08) / (0.63 - 0.08)     # 高度范围从 0.08 到 0.63 米
+    # ).clamp(0.0, 1.0)
 
-    # ------------------------------- 姿态指标 ------------------------------
-    root_quality = (root_up.clamp(-1.0, 1.0) + 1.0) * 0.5
-    torso_quality = (torso_up.clamp(-1.0, 1.0) + 1.0) * 0.5
-    posture_quality = 0.5 * (root_quality + torso_quality)
+    # # ------------------------------- 姿态指标 ------------------------------
+    # root_quality = (root_up.clamp(-1.0, 1.0) + 1.0) * 0.5
+    # torso_quality = (torso_up.clamp(-1.0, 1.0) + 1.0) * 0.5
+    # posture_quality = 0.5 * (root_quality + torso_quality)
 
-    geometry_quality = height_progress * (0.25 + 0.75 * posture_quality)
+    # geometry_quality = height_progress * (0.25 + 0.75 * posture_quality)
 
     # ----------------------------- 接近站立门控 -----------------------------
     # 站立质量逐渐接管，前期不要求手部卸载或完全静止。
@@ -528,10 +528,8 @@ def standing_quality(
         -wrist_load / 20.0
     )
     # ---------------------------- 站立分数 ----------------------------
-    standing_score = (
-        0.65 * stability_quality
-        + 0.35 * support_quality
-    )
+    # 稳定性和有效支撑共同决定维持奖励。
+    standing_score = stability_quality * support_quality
     # ---------------------------- 手脚质量因子 ----------------------------
     if not 0.0 <= limb_fraction <= 1.0:
         raise ValueError("limb_fraction 必须在 [0, 1] 内")
@@ -545,13 +543,143 @@ def standing_quality(
     )
 
     return (
-        0.35 * geometry_quality
-        + 0.65
-        * near_standing
+        near_standing
         * upright_gate
         * standing_score
         * limb_factor
     )
+
+def standing_geometry_potential(
+    env,
+    torso_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+    """根据当前高度和骨盆、躯干姿态计算几何势函数，范围约 [0, 1]。"""
+    robot = env.scene["robot"]
+
+    height = (
+        robot.data.root_pos_w.torch[:, 2]
+        - env.scene.env_origins[:, 2]
+    )
+    root_up = -robot.data.projected_gravity_b.torch[:, 2]
+
+    torso_quaternion = robot.data.body_link_pose_w.torch[
+        :, torso_cfg.body_ids, 3:7
+    ]
+    torso_quaternion = torso_quaternion / (
+        torso_quaternion.norm(dim=-1, keepdim=True).clamp_min(1e-8)
+    )
+    torso_up = (
+        1.0
+        - 2.0
+        * (
+            torso_quaternion[..., 0].square()
+            + torso_quaternion[..., 1].square()
+        )
+    ).amin(dim=-1)
+
+    height_progress = (
+        (height - 0.08) / (0.63 - 0.08)
+    ).clamp(0.0, 1.0)
+
+    root_quality = (root_up.clamp(-1.0, 1.0) + 1.0) * 0.5
+    torso_quality = (torso_up.clamp(-1.0, 1.0) + 1.0) * 0.5
+    posture_quality = 0.5 * (root_quality + torso_quality)
+
+    return height_progress * (0.25 + 0.75 * posture_quality)
+
+class GetUpPotentialReward(ManagerTermBase):
+    """根据真实动作执行前后的几何势函数计算进展奖励。"""
+
+    def __init__(self, cfg, env):
+        super().__init__(cfg, env)
+
+        gamma = float(cfg.params.get("gamma", 0.99))
+        if not math.isfinite(gamma) or not 0.0 <= gamma <= 1.0:
+            raise ValueError("gamma 必须为 [0, 1] 内的有限数")
+
+        self._potential_before = torch.zeros(
+            env.num_envs,
+            device=env.device,
+        )
+        self._captured_step = -1
+
+    @torch.no_grad()
+    def capture_before_step(self, env):
+        torso_cfg = self.cfg.params["torso_cfg"]
+
+        self._potential_before.copy_(
+            standing_geometry_potential(env, torso_cfg)
+        )
+        self._captured_step = int(env.common_step_counter)
+
+    def reset(self, env_ids=None):
+        ids = slice(None) if env_ids is None else env_ids
+        self._potential_before[ids] = 0.0
+        self._captured_step = -1
+
+    def __call__(self, env, torso_cfg, gamma=0.99):
+        expected_step = int(env.common_step_counter) - 1
+
+        if self._captured_step != expected_step:
+            raise RuntimeError("势函数奖励缺少本步动作执行前的状态，请检查 X2MultiMotionGetUpEnv.step 中的捕获调用")
+
+        potential_after = standing_geometry_potential(
+            env,
+            torso_cfg,
+        )
+
+        # 真正终止时使用吸收终态势函数 0。
+        # 时间截断保留实际势函数，与 timeout bootstrap 配合。
+        potential_after = torch.where(
+            env.termination_manager.terminated,
+            torch.zeros_like(potential_after),
+            potential_after,
+        )
+
+        shaping = (
+            gamma * potential_after
+            - self._potential_before
+        )
+
+        # RewardManager 随后还会乘 step_dt。
+        # 此处抵消，让配置 weight 直接表示差分奖励系数。
+        return shaping / env.step_dt
+
+
+class StandOnceReward(ManagerTermBase):
+    """连续站稳达到指定时间后，每回合发放一次奖励。"""
+
+    def __init__(self, cfg, env):
+        super().__init__(cfg, env)
+
+        hold_seconds = float(
+            cfg.params.get("hold_seconds", 0.5)
+        )
+        if not math.isfinite(hold_seconds) or hold_seconds <= 0.0:
+            raise ValueError("hold_seconds 必须为正的有限数")
+
+        self._paid = torch.zeros(
+            env.num_envs,
+            dtype=torch.bool,
+            device=env.device,
+        )
+
+    def reset(self, env_ids=None):
+        ids = slice(None) if env_ids is None else env_ids
+        self._paid[ids] = False
+
+    def __call__(self, env, hold_seconds=0.5):
+        # GetUpProgress 已在本步 termination 阶段更新，
+        # 此时尚未发生自动重置。
+        hold = env._getup_progress_snapshot["hold_seconds"]
+
+        reached = hold + 1e-6 >= hold_seconds
+        first_reached = reached & ~self._paid
+
+        self._paid |= first_reached
+
+        # 抵消 RewardManager 的 dt，使 weight=3 对应一次 +3。
+        return first_reached.float() / env.step_dt
 
 def standing_quality_reward(
     env,

@@ -99,6 +99,15 @@ class X2AMPGetUpEnv(ManagerBasedRLEnv):
 
 class X2MultiMotionGetUpEnv(X2AMPGetUpEnv):
     def step(self, action):
+        # 检查奖励管理器里是否启用了起身进度奖励。
+        if "getup_progress_reward" in self.reward_manager.active_terms:
+            progress_cfg = self.reward_manager.get_term_cfg(
+                "getup_progress_reward"
+            )
+
+            if progress_cfg.weight != 0.0:
+                progress_cfg.func.capture_before_step(self)
+
         # 必须在 step 前保存：自动重置会换成下一回合的动作编号。
         motion_ids = (
             self._getup_reference_motion_ids.clone()

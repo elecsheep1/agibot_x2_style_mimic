@@ -27,7 +27,7 @@ class MultiMotionAMPAlgorithmCfg(RslRlPpoAlgorithmCfg):
 
         "step_dt": 0.02,
         "num_steps": 5,
-        "style_reward_weight": 10.0,
+        "style_reward_weight": 50.0,
 
         # 环境通过 extras 提供门控；默认关闭，保持原版 AMP 行为。
         "reward_gate_enabled": True,

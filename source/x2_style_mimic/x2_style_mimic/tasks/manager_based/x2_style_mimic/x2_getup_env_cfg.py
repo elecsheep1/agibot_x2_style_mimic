@@ -256,7 +256,7 @@ class GetUpEventsCfg:
 class GetUpRewardsCfg:
     standing = RewTerm(
         func=getup_mdp.standing_quality_reward,
-        weight=10.0,
+        weight=2.0,
         params={
             "torso_cfg": SceneEntityCfg(
                 "robot",
@@ -310,6 +310,27 @@ class GetUpRewardsCfg:
         },
     )
 
+    getup_progress_reward = RewTerm(
+        func=getup_mdp.GetUpPotentialReward,
+        weight=3.0,
+        params={
+            "torso_cfg": SceneEntityCfg(
+                "robot",
+                body_names=["torso_link"],
+                preserve_order=True,
+            ),
+            "gamma": 0.99,
+        },
+    )
+
+    standing_once = RewTerm(
+        func=getup_mdp.StandOnceReward,
+        weight=3.0,
+        params={
+            "hold_seconds": 0.5,
+        },
+    )
+
     head_contact = RewTerm(
         func=getup_mdp.head_contact_penalty,
         weight=-2.0,
@@ -324,12 +345,12 @@ class GetUpRewardsCfg:
 
     action_rate = RewTerm(
         func=mdp.action_rate_l2,
-        weight=-0.015,
+        weight=-0.010,
     )
 
     action_second_difference = RewTerm(
         func=ActionSecondDifferencePenalty,
-        weight=-0.005,
+        weight=-0.000,
     )
 
     joint_pos_limits = RewTerm(
