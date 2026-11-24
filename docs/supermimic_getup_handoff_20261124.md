@@ -139,6 +139,7 @@ FK 与真实 link 姿态使用同一组 USD 碰撞顶点计算距离：最大距
 | 2026-11-24_20-26-59_getup_shared_ground_reset_check | 共同 AMP 父类补丁的 SuperMimic GPU 流程验证 |
 | 2026-11-24_20-31-44_getup_head_distance_short50 | 最新 50 轮训练，当前优先检查点来源 |
 | 2026-11-24_20-41-56_getup_head_distance_prediction_check | 最新检查点的新采样只读预测诊断 |
+| 2026-11-24_21-00-00_getup_world_refit_holdout | 固定策略世界模型补训，负结果：训练误差腰斩、留出全面变差 |
 
 ### 最新短程训练
 
@@ -175,6 +176,26 @@ FK 与真实 link 姿态使用同一组 USD 碰撞顶点计算距离：最大距
 
 报告：[prediction_report.json](/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/logs/supermimic/x2_supermimic_getup/2026-11-24_20-41-56_getup_head_distance_prediction_check/prediction_report.json)。当前证据支持优先检查长步模型误差，尚不能证明它是唯一瓶颈，也不能证明补训后 actor 一定学会起身。
 
+### 固定策略世界模型补训（负结果）
+
+[refit_supermimic_world_fixed_policy.py](/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/scripts/checks/refit_supermimic_world_fixed_policy.py) 已按当前口径修正并运行：冻结 actor、critic、判别器和全部归一化统计量，关闭探索噪声采集 2004 控制步（32 环境，约两个完整回合）；按回合留出 28 个训练回合，另整组留出 4 个环境（6、17、26、27）；窗口帧数 8、转移数 7；500 次世界模型更新，台阶 0、100、250、500。
+
+| 根位置 RMSE（平衡阶段） | 更新 0 | 100 | 250 | 500 |
+|---|---:|---:|---:|---:|
+| 训练回合 32 步 | 3.79 cm | 1.63 | 1.40 | 1.63 |
+| 回合留出 32 步 | 3.14 cm | 4.23 | 3.39 | 7.03 |
+| 环境留出 32 步 | 2.05 cm | 4.20 | 3.77 | 3.53 |
+| 回合留出 16 步 | 1.67 | 2.20 | 2.02 | 3.14 |
+| 回合留出 8 步 | 0.83 | 1.03 | 0.98 | 1.27 |
+
+训练损失从 0.0362 降到 0.0052，训练误差腰斩；两个留出集在**所有步长**上全部变差，没有任何检查点低于更新 0。回合留出 32 步的 p90 从 8.72 cm 涨到 16.30 cm。退化最大的是静止后期阶段（2.00 → 5.68 cm），低速躺地的动力学本来最容易学。环境留出的奖励方向 MAE 从 0.036 涨到 0.078，高度方向一致率从 0.889 降到 0.722。
+
+原因是记忆而非学习：28 条确定性轨迹约 2.8 万条转移，世界模型约 960 万参数，500 次更新约等于 16 个 epoch 且没有早停。**补训模型不可用于 BPTT，也不要在这一分支继续加训练量。**
+
+该实验还给出一个重要对照：原始模型在确定性固定策略分布上的 32 步误差只有 2–3 cm，而上一节的 9.60 cm 是在带探索噪声的动作上测的。BPTT 使用确定性动作，所以更接近 BPTT 口径的是 2–3 cm。"世界模型 32 步误差大是主要瓶颈"这个前提需要重新评估，不能继续沿用。
+
+报告：[report.json](/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/logs/supermimic/x2_supermimic_getup/2026-11-24_21-00-00_getup_world_refit_holdout/report.json)、[progress.json](/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/logs/supermimic/x2_supermimic_getup/2026-11-24_21-00-00_getup_world_refit_holdout/progress.json)。
+
 ## 可复现命令
 
 先进入项目目录并激活用户环境。不要在同一输出目录重复写入；脚本会创建带时间戳的新目录。
@@ -184,7 +205,7 @@ cd /home/panda/robotics_ws/x2_style_mimic/x2_style_mimic
 python -m unittest discover -s scripts/tests -p 'test_supermimic*.py' -v
 ```
 
-最后一次完整测试为 174 项通过。包括状态积分、运行归一化、监督损失、优化器分组、配置路由、价值上限、头部距离数值与梯度、部分环境接触清理、终止捕获顺序。部分测试使用模拟对象或 AST 隔离仿真依赖，不能代替全部真实后端验证。
+最后一次完整测试为 189 项通过。包括状态积分、运行归一化、监督损失、优化器分组、配置路由、价值上限、头部距离数值与梯度、部分环境接触清理、终止捕获顺序，以及补训脚本的窗口换算、留出划分与固定窗口去重。部分测试使用模拟对象或 AST 隔离仿真依赖，不能代替全部真实后端验证。
 
 复现最新短程实验：
 
@@ -204,17 +225,33 @@ python scripts/supermimic/diagnose_getup_model.py \
 
 该入口使用 --resume 读取原实验参数和检查点，但不调用训练调度器、不更新优化器。加载仍校验网络结构、task cfg、controller calibration 和接触几何等信息；若正式配置随后改变，不要绕过不兼容检查强行恢复。
 
+固定策略世界模型补训（输出目录必须不存在）：
+
+```bash
+python scripts/checks/refit_supermimic_world_fixed_policy.py \
+  --checkpoint logs/supermimic/x2_supermimic_getup/2026-11-24_20-31-44_getup_head_distance_short50/latest.pt \
+  --output logs/supermimic/x2_supermimic_getup/<新时间戳>_getup_world_refit_repeat \
+  --updates 500
+```
+
+只读想象轨迹诊断（新增，检查奖励分项、终止概率、动作饱和和姿态，不更新参数）：
+
+```bash
+python scripts/checks/audit_getup_imagination.py \
+  --resume logs/supermimic/x2_supermimic_getup/2026-11-24_20-31-44_getup_head_distance_short50/latest.pt \
+  --run-name getup_imagination_audit
+```
+
 小规模流程配置是 [getup_alignment_smoke.toml](/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/scripts/supermimic/configs/getup_alignment_smoke.toml)，只跑 2 轮，不能用来评价学习效果。
 
 ## 下一步工作
 
-1. 保持当前奖励、网络、物理随机化和 actor 不变。先适配现有 [refit_supermimic_world_fixed_policy.py](/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/scripts/checks/refit_supermimic_world_fixed_policy.py)，不要未经复核直接启动。
-2. 该旧脚本的冻结回调仍是 `lambda *args: None`，当前 runner 用关键字参数调用世界模型归一化更新，需支持 `*args, **kwargs`。其训练窗口仍按 8 条转移硬编码；如保持当前训练口径，应由 8 帧转换为 7 条转移，数据池、采样和报告同时修正。
-3. 固定 actor、critic、判别器和全部归一化统计量，采集完整回合。按环境与回合 ID 划分 train 和 holdout，不能随机拆重叠窗口。保存数据、划分及固定评估窗口。
-4. 在同一留出窗口上记录补训前后 1、8、16、32 步误差，区分起身早期、接触转换与低速后期。同步看代理奖励误差，不只看监督训练损失。
-5. 可先做 500 次世界模型更新，在 0、100、250、500 次记录结果。所有策略及判别器参数、输入统计量保持不变，并比较它们的 state_dict。不要用 actor probe 同时更新策略，以免混入变量。
-6. 若模型补训改善留出预测，再进行独立的联合训练对照。若仅训练误差下降而留出误差不改善，应继续查模型、数据覆盖和接触转换。想象长度 8、16、32 的课程可以作为后续受控实验，但尚未实现，之前更旧版本的 H8 实验也没有证明单独缩短即可解决问题。
-7. 原 PPO 加 AMP 的共同重置补丁还应单独跑完整验收，重点检查自动重置的终止数据、部分环境清理及新回合接触标签。
+1. 世界模型补训分支已结束，结果是负结果。补训模型（`world_model_refit.pt`）不可用于 BPTT，不要继续加训练量。
+2. 重新评估"世界模型是不是瓶颈"。旧诊断的 9.60 cm 是带探索噪声的动作口径；确定性动作下 32 步只有 2–3 cm。BPTT 用确定性动作，所以需要用同一口径确认，不能继续沿用旧结论。
+3. 用 [audit_getup_imagination.py](/home/panda/robotics_ws/x2_style_mimic/x2_style_mimic/scripts/checks/audit_getup_imagination.py) 检查 BPTT 的想象轨迹：奖励分项占比、终止概率、动作饱和，以及 actor 在想象里是否已经"打算"起身。该脚本只读，不更新任何参数。
+4. 只有确认奖励/终止头、actor 目标或数据覆盖是真瓶颈后，才考虑改正式 source（动作二阶差分、接触阈值、上下文编码）。任何 `getup_task` 配置改动都会让旧检查点无法恢复，必须新起实验。
+5. 若仍要做补训方向，唯一还有意义的变体是数据覆盖：每环境 8–10 个回合（需要提高 `replay_steps` 或流式累积），而不是增加更新次数。
+6. 原 PPO 加 AMP 的共同重置补丁还应单独跑完整验收，重点检查自动重置的终止数据、部分环境清理及新回合接触标签。
 
 不要因为 50 轮没有成功就宣称算法不成立，也不要因为训练损失小就认定世界模型可支撑 32 步 BPTT。当前单种子、短评估和新采样窗口的证据边界需要保留。
 
