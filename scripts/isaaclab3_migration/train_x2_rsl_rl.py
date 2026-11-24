@@ -166,7 +166,13 @@ def main() -> None:
         dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
         dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
         print("[4/4] Starting training")
-        runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
+        try:
+            runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
+        except KeyboardInterrupt:
+            checkpoint_path = os.path.join(log_dir, "model_interrupted.pt")
+            print("\n[INFO] Training interrupted by user; saving checkpoint before shutdown.")
+            runner.save(checkpoint_path)
+            print(f"[INFO] Saved interruption checkpoint: {checkpoint_path}")
         print(f"Training time: {time.time() - start_time:.2f} seconds")
     except BaseException:
         # Kit can otherwise close silently for SystemExit raised by a plugin or
