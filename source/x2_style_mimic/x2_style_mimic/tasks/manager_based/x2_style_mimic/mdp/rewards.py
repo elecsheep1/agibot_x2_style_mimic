@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from isaaclab.managers import SceneEntityCfg
+from isaaclab.managers import ManagerTermBase, SceneEntityCfg
 from isaaclab.utils.math import wrap_to_pi
 
 if TYPE_CHECKING:
@@ -124,3 +124,53 @@ def self_contact_penalty(
     return self_contact_control_cost(
         env.scene.sensors[sensor_cfg.name]
     )
+
+class ActionSecondDifferencePenalty(ManagerTermBase):
+    """原始动作的二阶差分平方和，屏蔽每个回合前两个动作步。"""
+
+    def __init__(self, cfg, env):
+        super().__init__(cfg, env)
+
+        action = env.action_manager.action
+
+        self._previous_action = torch.zeros_like(action)
+        self._older_action = torch.zeros_like(action)
+        self._history_count = torch.zeros(
+            env.num_envs,
+            dtype=torch.long,
+            device=env.device,
+        )
+
+    def reset(self, env_ids=None):
+        if env_ids is None:
+            env_ids = slice(None)
+
+        self._previous_action[env_ids] = 0.0
+        self._older_action[env_ids] = 0.0
+        self._history_count[env_ids] = 0
+
+    def __call__(self, env):
+        action = env.action_manager.action
+
+        second_difference = (
+            action
+            - 2.0 * self._previous_action
+            + self._older_action
+        )
+
+        penalty = second_difference.square().sum(dim=-1)
+
+        # 有两个历史动作后，当前步才构成有效的三步差分。
+        penalty = torch.where(
+            self._history_count >= 2,
+            penalty,
+            torch.zeros_like(penalty),
+        )
+
+        # 奖励每个控制步计算一次，随后推进动作历史。
+        with torch.no_grad():
+            self._older_action.copy_(self._previous_action)
+            self._previous_action.copy_(action)
+            self._history_count.add_(1).clamp_(max=2)
+
+        return penalty

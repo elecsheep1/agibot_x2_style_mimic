@@ -15,6 +15,7 @@ from isaaclab.envs import mdp as isaac_mdp
 from isaaclab.utils.noise import UniformNoiseCfg
 
 from . import mdp
+from .mdp.rewards import ActionSecondDifferencePenalty
 from .mdp import getup as getup_mdp
 from .mdp.amp import (
     AMP_KEY_BODY_NAMES,
@@ -323,8 +324,12 @@ class GetUpRewardsCfg:
 
     action_rate = RewTerm(
         func=mdp.action_rate_l2,
-        weight=-0.010,
-        # weight=-0.005,
+        weight=-0.015,
+    )
+
+    action_second_difference = RewTerm(
+        func=ActionSecondDifferencePenalty,
+        weight=-0.005,
     )
 
     joint_pos_limits = RewTerm(
