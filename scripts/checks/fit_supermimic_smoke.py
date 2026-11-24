@@ -204,6 +204,14 @@ def main():
             raise ValueError("世界模型特征维度已改变；保留回合划分时请增加 --refit-input-stats")
         model.input_mean.copy_(reference_checkpoint["model"]["input_mean"].to(args.device))
         model.input_std.copy_(reference_checkpoint["model"]["input_std"].to(args.device))
+        if hasattr(model, 'NORMALIZATION_MODE'):
+            for name in ('state_normalizer', 'action_normalizer'):
+                prefix = name + '.'
+                saved_stats = {key[len(prefix):]: value for key, value in reference_checkpoint['model'].items()
+                               if key.startswith(prefix)}
+                if not saved_stats:
+                    raise ValueError('参考模型缺少运行归一化统计量，请增加 --refit-input-stats 重新初始化')
+                getattr(model, name).load_state_dict(saved_stats, strict=True)
         model.stats_ready.fill_(True)
         torch.manual_seed(args.seed)
     consistency_margins = None
@@ -213,7 +221,14 @@ def main():
             calibration = sample_training_batch(data, train, 2048, 8, args.device, args.early_fraction)
             residuals = consistency_residuals(calibration["states"], spec, data["metadata"]["step_dt"], state, dynamics)
             consistency_margins = {name: float(value.abs().flatten().quantile(0.95)) for name, value in residuals.items()}
-    optimizer = torch.optim.Adam(model.parameters(), lr=2e-4)
+    optimizer_path = Path(dynamics.__file__).with_name('optimizers.py')
+    if optimizer_path.is_file():
+        build_optimizers = importlib.import_module(dynamics.__package__ + '.optimizers').build_optimizers
+        optimizers = build_optimizers(model, lr=2e-4)
+        optimizer_mode = 'muon_adam_v1'
+    else:
+        optimizers = [torch.optim.Adam(model.parameters(), lr=2e-4)]
+        optimizer_mode = 'adam_single_v1'
 
     def physical_metrics(predicted, target):
         p = state.unpack_state(predicted, spec)
@@ -278,10 +293,12 @@ def main():
             loss = loss + args.consistency_weight * consistency
         if not bool(torch.isfinite(loss)):
             raise RuntimeError("Nonfinite dynamics loss")
-        optimizer.zero_grad(set_to_none=True)
+        for optimizer in optimizers:
+            optimizer.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0, error_if_nonfinite=True)
-        optimizer.step()
+        for optimizer in optimizers:
+            optimizer.step()
         if (update + 1) % 50 == 0:
             print(f"[WorldModel] {update + 1}/{args.updates} horizon={horizon} loss={float(loss.detach()):.6f}", flush=True)
     torch.random.set_rng_state(rng)
@@ -302,6 +319,9 @@ def main():
                   note="Held-out episodes; errors are end-of-horizon component RMSE; first_3_seconds uses episode elapsed time, including RSI births")
     args.output.mkdir(parents=True, exist_ok=False)
     torch.save(dict(model=model.state_dict(), metadata=data["metadata"], hidden_dims=tuple(args.hidden_dims),
+                    dynamics_mode=getattr(model, 'DYNAMICS_MODE', 'independent_delta_v1'),
+                    normalization_mode=getattr(model, 'NORMALIZATION_MODE', 'fixed_input_v1'),
+                    optimizer_mode=optimizer_mode,
                     consistency_weight=args.consistency_weight, consistency_margins=consistency_margins,
                     training_horizons=args.train_horizons, early_fraction=args.early_fraction,
                     limiter=data["limiter"], context_dim=data["contexts"].shape[-1]), args.output / "world_model.pt")

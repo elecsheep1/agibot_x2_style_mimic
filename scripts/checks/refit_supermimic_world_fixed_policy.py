@@ -155,6 +155,9 @@ def main():
             runtime = build_runtime(env, cfg, checkpoint)
             args.output.mkdir(parents=True)
             trainer = runtime.trainer
+            world_update_normalization = getattr(trainer.world_model, 'update_normalization', None)
+            if world_update_normalization is not None:
+                trainer.world_model.update_normalization = lambda *args: None
             update_normalization = trainer.proprioception.update_normalization
             trainer.proprioception.update_normalization = lambda states: None
             runtime.runner.action_noise_std = 0.
@@ -200,6 +203,8 @@ def main():
                 runtime.runner.collect(min(128, steps - start))
                 print(f'[采集] {min(start + 128, steps)}/{steps}', flush=True)
             trainer.proprioception.update_normalization = update_normalization
+            if world_update_normalization is not None:
+                trainer.world_model.update_normalization = world_update_normalization
             replay = runtime.replay
             data = {name: getattr(replay, name)[:steps].detach().cpu().clone()
                     for name in ('state', 'next_state', 'action', 'terminated', 'truncated', 'episode_ids', 'step_ids')}
@@ -249,7 +254,9 @@ def main():
                           collection_noise=0., evaluation_sampling='固定窗口，早期<3秒和后期各占一半；窗口可重叠',
                           note='只验证固定策略分布上的模型补训，不选择留出集最优权重，不证明策略会因此学会起身。')
             (args.output / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False))
-            torch.save(dict(model=trainer.world_model.state_dict(), optimizer=trainer.world_optimizer.state_dict(),
+            torch.save(dict(model=trainer.world_model.state_dict(),
+                            optimizers={name: optimizer.state_dict() for name, optimizer in runtime.optimizers.items()
+                                        if name == 'world' or name.startswith('world/')},
                             base_checkpoint=str(args.checkpoint.resolve()), metadata=runtime.metadata,
                             updates=args.updates), args.output / 'world_model_refit.pt')
             print('[完成]', args.output, flush=True)

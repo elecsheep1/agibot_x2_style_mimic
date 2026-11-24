@@ -7,6 +7,7 @@ import torch
 
 from getup_data import OfflineWorldReplay, read_world_checkpoint, shared_vector, action_bounds_from_calibration
 from contact_assets import build_contact_geometry, contact_geometry_contract, validate_geometry_checkpoint
+from getup_checkpointing import collect_optimizers
 
 
 @dataclass
@@ -61,8 +62,17 @@ def build_runtime(env, args, resume):
     from x2_style_mimic.algorithms.supermimic.world_model import TargetLimiter, WorldModel
 
     dynamics_mode = getattr(WorldModel, 'DYNAMICS_MODE', 'independent_delta_v1')
+    normalization_mode = getattr(WorldModel, 'NORMALIZATION_MODE', 'fixed_input_v1')
+    optimizer_mode = getattr(SuperMimicTrainer, 'OPTIMIZER_MODE', 'adam_single_v1')
+    sampling_mode = getattr(SuperMimicRunner, 'SAMPLING_MODE', 'shared_batch_transitions_v1')
     if resume is not None and resume['metadata'].get('dynamics_mode', 'independent_delta_v1') != dynamics_mode:
         raise ValueError('动力学结构已改变，旧检查点不能直接续训；请从头训练新结构')
+    if resume is not None and resume['metadata'].get('normalization_mode', 'fixed_input_v1') != normalization_mode:
+        raise ValueError('世界模型归一化结构已改变，旧检查点不能直接续训')
+    if resume is not None and resume['metadata'].get('optimizer_mode', 'adam_single_v1') != optimizer_mode:
+        raise ValueError('优化器分组已改变，旧检查点不能直接续训')
+    if resume is not None and resume['metadata'].get('sampling_mode', 'shared_batch_transitions_v1') != sampling_mode:
+        raise ValueError('采样窗口或批量约定已改变，旧检查点不能直接续训')
     env.reset()
     device, spec, robot = env.device, env.world_state_spec, env.scene['robot']
     context, context_spec = read_sim_context(env)
@@ -109,17 +119,29 @@ def build_runtime(env, args, resume):
         torch.cat(reference.amp_states), num_steps=5, **discriminator_cfg,
     ).to(device)
     style = DifferentiableStyleReward(discriminator).to(device)
+    actor_hidden_dims = tuple(args.actor_hidden_dims)
+    critic_hidden_dims = tuple(args.critic_hidden_dims)
+    if resume is not None:
+        for key, widths in (('actor_hidden_dims', actor_hidden_dims),
+                            ('critic_hidden_dims', critic_hidden_dims)):
+            if tuple(resume['metadata'].get(key, ())) != widths:
+                raise ValueError(f'恢复训练的网络结构不兼容：{key}；请使用相同结构或从头训练')
+        if resume['metadata'].get('policy_network_mode') != 'layernorm_gelu_v1':
+            raise ValueError('恢复训练的策略网络结构不兼容；请使用 LayerNorm/GELU 版本检查点')
     action_lower, action_upper = action_bounds_from_calibration(calibration)
     actor = GoalConditionedActor(proprio.output_dim, 0, spec.num_actions,
-                                 action_lower=action_lower, action_upper=action_upper).to(device)
+                                 action_lower=action_lower, action_upper=action_upper,
+                                 hidden_dims=actor_hidden_dims).to(device)
     critic = GoalConditionedCritic(
-        spec.dim, context.shape[-1], 0,
+        spec.dim, context.shape[-1], 0, hidden_dims=critic_hidden_dims,
     ).to(device)
     world_timing = (dict(dt=env.step_dt, decimation=env.cfg.decimation)
                     if dynamics_mode == 'gencoord_integrated_v1' else {})
     world = WorldModel(spec, context.shape[-1], TargetLimiter(**calibration).to(device),
                        hidden_dims, **world_timing).to(device)
     if resume is None and initial is not None:
+        if initial.get('normalization_mode', initial['metadata'].get('normalization_mode', 'fixed_input_v1')) != normalization_mode:
+            raise ValueError('预训练模型归一化结构不匹配；请使用对应结构的检查点，或选择 --world-model-scratch')
         if initial['model']['input_mean'].shape != world.input_mean.shape:
             raise ValueError('预训练世界模型输入维度不匹配；请使用新输入结构的检查点，或选择 --world-model-scratch')
         world.load_state_dict(initial['model'], strict=True)
@@ -128,11 +150,16 @@ def build_runtime(env, args, resume):
     geometry_contract = contact_geometry_contract(contact_geometry)
     task = GetupTask(spec, limits[0], task_cfg, features.kinematics, ids,
                      contact_geometry=contact_geometry).to(device)
+    loss_scales = {name: getattr(args, name) for name in (
+        'nominal_error_root_pose_pos', 'nominal_error_root_pose_ori',
+        'nominal_error_joint_pos', 'nominal_error_joint_vel',
+    ) if name in TrainerCfg.__dataclass_fields__}
     trainer_cfg = TrainerCfg(horizon=args.imagination_horizon, world_learning_rate=args.world_lr,
                              actor_learning_rate=args.actor_lr, critic_learning_rate=args.critic_lr,
                              gamma=args.gamma, lam=args.lam, gradient_norm=args.gradient_norm,
                              actor_gradient_value=args.actor_gradient_value,
-                             critic_epochs=args.critic_epochs, critic_minibatches=args.critic_minibatches)
+                             critic_epochs=args.critic_epochs, critic_minibatches=args.critic_minibatches,
+                             **loss_scales)
     modules = dict(actor=actor, critic=critic, world_model=world, proprioception=proprio,
                    amp_features=features, style=style, task=task)
     if resume is not None:
@@ -150,8 +177,7 @@ def build_runtime(env, args, resume):
     trainer = SuperMimicTrainer(
         actor, critic, world, proprio, features, style, task, trainer_cfg,
     )
-    optimizers = dict(world=trainer.world_optimizer, actor=trainer.actor_optimizer,
-                      critic=trainer.critic_optimizer, discriminator=discriminator.optimizer)
+    optimizers = collect_optimizers(trainer, discriminator)
     if resume is not None:
         for name, optimizer in optimizers.items():
             optimizer.load_state_dict(resume['optimizers'][name])
@@ -181,8 +207,15 @@ def build_runtime(env, args, resume):
     metadata['discriminator_cfg'] = discriminator_cfg
     metadata['transition_schema_version'] = getattr(env, 'transition_schema_version', 2)
     metadata['contact_mode'] = 'geometry_proxy'
+    metadata['actor_hidden_dims'] = list(actor_hidden_dims)
+    metadata['critic_hidden_dims'] = list(critic_hidden_dims)
+    metadata['policy_network_mode'] = 'layernorm_gelu_v1'
     metadata['actor_action_mode'] = 'bounded_joint_range_v1'
     metadata['dynamics_mode'] = dynamics_mode
+    metadata['normalization_mode'] = normalization_mode
+    metadata['optimizer_mode'] = optimizer_mode
+    metadata['sampling_mode'] = sampling_mode
+    metadata['world_window_unit'] = 'state_frames'
     metadata['contact_geometry_contract'] = geometry_contract
     metadata['task_memory_spec'] = {name: dict(shape=list(value.shape[1:]), dtype=str(value.dtype))
                                   for name, value in memory.items()}

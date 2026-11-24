@@ -150,6 +150,39 @@ def quaternion_to_rotation_6d(quaternion):
     )
 
 
+def quaternion_to_rotation_matrix(quaternion):
+    """XYZW 四元数转换为旋转矩阵。
+
+    返回形状：[..., 3, 3]。
+    """
+    columns = quaternion_to_rotation_6d(
+        quaternion
+    ).unflatten(            # unflatten(-1, (2, 3)) 把最后的 6 维拆成“两个三维向量 [B, 6] → [B, 2, 3]
+        -1,
+        (2, 3),
+    )
+
+    # 分别取出这两个向量
+    first, second = columns.unbind(
+        dim=-2
+    )
+
+    third = torch.cross(
+        first,
+        second,
+        dim=-1,
+    )
+
+    return torch.stack(
+        (
+            first,
+            second,
+            third,
+        ),
+        dim=-1,
+    )
+
+
 def quaternion_angle_error(first, second):
     """姿态角误差 [rad]，范围为 [0, pi]。"""
     first = normalize_quaternion(first)

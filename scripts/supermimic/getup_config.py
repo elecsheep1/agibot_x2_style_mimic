@@ -43,16 +43,24 @@ class GetupTrainConfig:
     iterations: int = 200
     collection_steps: int = 32
     replay_steps: int = 2048
-    batch_size: int = 128
+    world_batch_size: int = 2048
+    policy_batch_size: int = 4096
+    amp_batch_size: int = 128
     action_noise: float = 0.1
 
     # 世界模型与策略优化。
     world_hidden_dims: tuple[int, ...] = (512, 512, 512)
+    actor_hidden_dims: tuple[int, ...] = (2048, 1024, 512, 256)
+    critic_hidden_dims: tuple[int, ...] = (256, 128)
     world_horizons: tuple[int, ...] = (8,)
     imagination_horizon: int = 32
     world_updates: int = 10
     discriminator_updates: int = 4
     world_lr: float = 2e-4
+    nominal_error_root_pose_pos: float = 0.01
+    nominal_error_root_pose_ori: float = 0.02
+    nominal_error_joint_pos: float = 0.1
+    nominal_error_joint_vel: float = 3.14
     actor_lr: float = 2e-4
     critic_lr: float = 2e-4
     gamma: float = 0.99
@@ -109,21 +117,26 @@ class GetupTrainConfig:
     def validate(self):
         if sum((self.world_model_scratch, self.world_model_init is not None, self.resume is not None)) != 1:
             raise ValueError('请选择一种初始化方式：随机初始化、预训练世界模型或恢复训练')
-        positive = ('num_envs', 'iterations', 'collection_steps', 'batch_size', 'world_updates',
+        positive = ('num_envs', 'iterations', 'collection_steps', 'world_batch_size',
+                    'policy_batch_size', 'amp_batch_size', 'world_updates',
                     'discriminator_updates', 'replay_steps', 'warmup_steps', 'warmup_collect_interval',
                     'eval_interval', 'checkpoint_interval', 'log_interval', 'imagination_horizon')
         if any(getattr(self, key) < 1 for key in positive) or self.warmup_updates < 0:
             raise ValueError('采样大小、轮数和间隔必须为正，预热更新数可以为零')
         if self.world_model_scratch and self.warmup_updates < 1:
             raise ValueError('随机初始化世界模型必须先执行监督预热')
-        if not self.world_hidden_dims or min(self.world_hidden_dims) < 1:
-            raise ValueError('世界模型隐藏层宽度必须为正')
-        if not self.world_horizons or any(not 1 <= h <= 32 for h in self.world_horizons) or self.imagination_horizon > 32:
-            raise ValueError('世界模型和想象预测长度必须在 [1,32] 内')
-        required = max(max(self.world_horizons), 5) + 1
+        for name in ('world_hidden_dims', 'actor_hidden_dims', 'critic_hidden_dims'):
+            widths = getattr(self, name)
+            if not isinstance(widths, (tuple, list)) or not widths or any(type(v) is not int or v < 1 for v in widths):
+                raise ValueError(f'{name} 必须为非空的正整数序列')
+        if not self.world_horizons or any(not 2 <= h <= 32 for h in self.world_horizons) or self.imagination_horizon > 32:
+            raise ValueError('世界模型窗口必须为 [2,32] 帧，想象步数必须在 [1,32] 内')
+        required = max(max(self.world_horizons) - 1, 5) + 1
         if self.warmup_steps < required or self.replay_steps < max(required, self.warmup_steps):
             raise ValueError('预热步数必须覆盖最长窗口，replay_steps 必须不少于预热步数')
-        for name in ('actor_lr', 'critic_lr', 'world_lr', 'eval_seconds'):
+        for name in ('actor_lr', 'critic_lr', 'world_lr', 'eval_seconds',
+                     'nominal_error_root_pose_pos', 'nominal_error_root_pose_ori',
+                     'nominal_error_joint_pos', 'nominal_error_joint_vel'):
             if not math.isfinite(getattr(self, name)) or getattr(self, name) <= 0:
                 raise ValueError(f'{name} 必须为正有限数')
         if not 0 <= self.gamma < 1 or not 0 <= self.lam <= 1:
@@ -174,7 +187,10 @@ def runner_defaults():
         experiment_name=runner.experiment_name,
         run_name=runner.run_name, seed=runner.seed, iterations=runner.max_iterations,
         collection_steps=runner.collection_steps, replay_steps=runner.replay_steps,
-        batch_size=runner.batch_size, action_noise=runner.action_noise,
+        world_batch_size=getattr(runner.world_model, 'batch_size', GetupTrainConfig.world_batch_size),
+        policy_batch_size=getattr(runner.policy, 'batch_size', GetupTrainConfig.policy_batch_size),
+        amp_batch_size=getattr(runner.amp, 'batch_size', GetupTrainConfig.amp_batch_size),
+        action_noise=runner.action_noise,
         world_model_scratch=mode == 'scratch',
         world_model_init=runner.world_model_checkpoint if mode == 'pretrained' else None,
         offline_world_fraction=runner.offline_world_fraction,
@@ -201,6 +217,11 @@ def runner_defaults():
     for group, fields_map in mapping.items():
         for source, destination in fields_map.items():
             values[destination] = getattr(getattr(runner, group), source)
+    for name in ('nominal_error_root_pose_pos', 'nominal_error_root_pose_ori',
+                 'nominal_error_joint_pos', 'nominal_error_joint_vel'):
+        values[name] = getattr(runner.world_model, name, getattr(GetupTrainConfig, name))
+    for name in ('actor_hidden_dims', 'critic_hidden_dims'):
+        values[name] = getattr(runner.policy, name, getattr(GetupTrainConfig, name))
     values.update(checkpoint_interval=runner.checkpoint_interval, log_interval=runner.log_interval)
     return GetupTrainConfig.from_mapping(values)
 

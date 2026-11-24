@@ -1,5 +1,6 @@
 """Regressions for get-up semantics: lying is valid, empty goals and differentiable reward."""
 import unittest
+from unittest.mock import patch
 from types import SimpleNamespace
 
 import torch
@@ -93,6 +94,13 @@ class GetUpTests(unittest.TestCase):
             self.task.reward(self.standing, torch.zeros(2, 2), self.standing,
                              torch.zeros(2, 3), torch.ones(2))
 
+    def test_reward_upper_bound_includes_style_and_dt(self):
+        self.assertAlmostEqual(self.task.max_step_reward,
+                               self.cfg.step_dt * (self.cfg.standing_weight + self.cfg.style_weight))
+        reward, _ = self.task.reward(self.standing, torch.zeros(2, 2), self.standing,
+                                    torch.empty(2, 0), torch.ones(2))
+        self.assertTrue(bool((reward <= self.task.max_step_reward + 1e-7).all()))
+
     def test_controlled_joint_acceleration(self):
         following = self.standing.clone()
         fields = state.unpack_state(following, self.spec)
@@ -106,13 +114,33 @@ class GetUpTests(unittest.TestCase):
         networks = load('actor_critic')
         trainer = trainer_module.SuperMimicTrainer.__new__(trainer_module.SuperMimicTrainer)
         trainer.device = 'cpu'
+        trainer.value_max = self.task.max_step_reward / (1 - .99)
         trainer.cfg = trainer_module.TrainerCfg(critic_epochs=1, critic_minibatches=1)
         trainer.critic = networks.GoalConditionedCritic(self.spec.dim, 2, 0)
-        trainer.critic_optimizer = torch.optim.Adam(trainer.critic.parameters(), lr=1e-3)
+        if hasattr(trainer_module, 'build_optimizers'):
+            trainer.critic_optimizers = trainer_module.build_optimizers(trainer.critic, lr=1e-3)
+        else:
+            trainer.critic_optimizer = torch.optim.Adam(trainer.critic.parameters(), lr=1e-3)
         trajectory = SimpleNamespace(states=self.standing[None].expand(4, -1, -1),
                                      goals=torch.empty(4, 2, 0), task_contexts=torch.empty(4, 2, 0), rewards=torch.ones(3, 2),
                                      termination_probabilities=torch.zeros(3, 2))
-        metrics = trainer.update_critic(trajectory, torch.zeros(2, 2))
+        original_loss = trainer_module.critic_loss
+        observed_targets = []
+
+        def checked_loss(predictions, targets):
+            observed_targets.append(targets.detach().clone())
+            self.assertFalse(targets.requires_grad)
+            return original_loss(predictions, targets)
+
+        trainer.value_max = .5
+        with patch.object(trainer_module, 'critic_loss', side_effect=checked_loss):
+            metrics = trainer.update_critic(trajectory, torch.zeros(2, 2))
+        self.assertTrue(bool((torch.cat(observed_targets) == .5).all()))
+        observed_targets.clear()
+        trajectory.rewards = -torch.ones(3, 2)
+        with patch.object(trainer_module, 'critic_loss', side_effect=checked_loss):
+            trainer.update_critic(trajectory, torch.zeros(2, 2))
+        self.assertTrue(bool((torch.cat(observed_targets) < 0).all()))
         self.assertGreater(metrics['critic_gradient_norm'], 0)
         self.assertEqual(metrics['critic_updates'], 1)
 

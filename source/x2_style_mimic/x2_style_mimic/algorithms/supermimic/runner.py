@@ -10,6 +10,8 @@ from .batches import merge_world_batches
 class SuperMimicRunner:
     """SuperMimic 训练器,用于在真实转移采集和 SuperMimic 训练之间交替。"""
 
+    SAMPLING_MODE = "world_frames_independent_batches_v1"
+
     def __init__(
         self,
         env,
@@ -203,6 +205,12 @@ class SuperMimicRunner:
             transition["commands"] = commands
             self.replay.add(transition)
 
+            self.trainer.world_model.update_normalization(
+                real_states=captured["state"].to(self.device),
+                real_actions=captured["action"].to(self.device),
+                context=self.replay.contexts.to(self.device),
+            )
+
             # 判断哪些环境结束了
             terminated = captured["terminated"].to(self.device)
             truncated = captured["truncated"].to(self.device)
@@ -292,7 +300,11 @@ class SuperMimicRunner:
         offline_world_replay=None,      # 离线数据缓存
         offline_world_fraction=0.0,     # 采样批次中，离线数据所占的比例。
     ):
-        """仅供世界模型监督训练使用的混合真实转移。"""
+        """仅供世界模型监督训练使用的混合真实转移。
+
+        horizon 表示转移数。
+        返回状态数量为 horizon + 1。
+        """
         if (
             not isinstance(batch_size, int)
             or batch_size < 1
@@ -353,63 +365,138 @@ class SuperMimicRunner:
     def train_iteration(
         self,
         reference,
+        *,
         collection_steps=32,
-        batch_size=256,
-        world_horizon=8,
+        world_batch_size=2048,
+        policy_batch_size=4096,
+        amp_batch_size=128,
+        world_window_frames=8,
         world_updates=10,
         discriminator_updates=4,
         offline_world_replay=None,
         offline_world_fraction=0.0,
     ):
+        """模型、策略和 AMP 分别使用自己的批量。
+
+        world_window_frames 表示状态帧数。
+        底层 replay 的 horizon 仍表示转移数。
+        """
         for value in (
             collection_steps,
-            batch_size,
-            world_horizon,
+            world_batch_size,
+            policy_batch_size,
+            amp_batch_size,
+            world_window_frames,
             world_updates,
             discriminator_updates,
         ):
             if (
-                not isinstance(value, int) or value < 1
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or value < 1
             ):
                 raise ValueError("采集、采样与更新次数必须为正整数")
+        if world_window_frames < 2:
+            raise ValueError("世界模型窗口至少需要两帧状态")
         if (
-            not math.isfinite(offline_world_fraction)
-            or not 0.0 <= offline_world_fraction <= 1.0
+            not math.isfinite(
+                offline_world_fraction
+            )
+            or not 0.0
+            <= offline_world_fraction
+            <= 1.0
         ):
             raise ValueError("offline_world_fraction 必须在 [0, 1] 内")
+        if (
+            offline_world_fraction > 0
+            and offline_world_replay is None
+        ):
+            raise ValueError("离线数据比例大于零，但没有提供离线回放数据")
 
-        metrics = self.collect(collection_steps)
+        # 只在配置进入采样接口时转换一次。
+        # 把“状态帧数”转换成“动作转移步数”
+        world_horizon = (
+            world_window_frames - 1
+        )
+        metrics = self.collect(
+            collection_steps
+        )
+        world_totals = {}
 
         for _ in range(world_updates):
             batch = self.sample_world_batch(
-                batch_size=batch_size,
+                batch_size=world_batch_size,
                 horizon=world_horizon,
                 offline_world_replay=offline_world_replay,
                 offline_world_fraction=offline_world_fraction,
             )
+            world_metrics = self.trainer.update_world_model(batch)
 
-            metrics.update(
-                self.trainer.update_world_model(batch)
-            )
+            # 取出这个指标之前累计的值。
+            # 如果还没有这个指标，就从 0.0 开始。
+            # 加上本次的值，再保存回去。
+            for name, value in world_metrics.items():
+                world_totals[name] = (
+                    world_totals.get(name, 0.0)
+                    + value
+                )
+
+        # 记录本轮所有模型更新的平均值，
+        # 不再只保留最后一次模型更新的日志。
+        metrics.update(
+            {
+                name: total / world_updates
+                for name, total
+                in world_totals.items()
+            }
+        )
 
         offline_count = (
-            int(batch_size * offline_world_fraction)
+            int(
+                world_batch_size
+                * offline_world_fraction
+            )
             if offline_world_replay is not None
             else 0
         )
 
-        metrics["world/offline_fraction"] = (
-            offline_count / batch_size
+        metrics.update(
+            {
+                "world/offline_fraction": (
+                    offline_count
+                    / world_batch_size
+                ),
+                "world/window_frames": (
+                    world_window_frames
+                ),
+                "world/transitions_per_window": (
+                    world_horizon
+                ),
+                "world/batch_size": (
+                    world_batch_size
+                ),
+                "policy/batch_size": (
+                    policy_batch_size
+                ),
+                "amp/batch_size": (
+                    amp_batch_size
+                ),
+            }
         )
 
         for _ in range(discriminator_updates):
-            policy_windows = self.sample_policy_windows(batch_size)
+            policy_windows = (
+                self.sample_policy_windows(
+                    amp_batch_size
+                )
+            )
 
-            # 这里是从参考动作数据中抽取一批 AMP 历史窗口，并取出返回结果中的 "states" 数据。
-            reference_windows = reference.sample_amp_windows(
-                batch_size=batch_size,
-                num_steps=self.amp_steps,
-            )["states"]
+            reference_windows = (
+                reference.sample_amp_windows(
+                    batch_size=amp_batch_size,
+                    num_steps=self.amp_steps,
+                )["states"]     # 只取状态，丢弃其他字段
+            )
 
             metrics.update(
                 self.trainer.update_discriminator(
@@ -420,7 +507,7 @@ class SuperMimicRunner:
 
         policy_batch = (
             self.replay.sample_policy_histories(
-                batch_size=batch_size,
+                batch_size=policy_batch_size,
                 history_length=self.history_length,
             )
         )
@@ -433,8 +520,9 @@ class SuperMimicRunner:
             )
         )
 
-        # 把 actor_metrics 中的键值对合并到 metrics 中。
-        metrics.update(actor_metrics)
+        metrics.update(
+            actor_metrics
+        )
 
         metrics.update(
             self.trainer.update_critic(
@@ -444,3 +532,4 @@ class SuperMimicRunner:
         )
 
         return metrics
+

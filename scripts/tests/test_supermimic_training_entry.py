@@ -80,7 +80,7 @@ class TrainingEntryTests(unittest.TestCase):
         runtime = SimpleNamespace(warmup_complete=completed, modules=modules, offline=None,
             trainer=SimpleNamespace(world_model=model, update_world_model=update),
             runner=SimpleNamespace(collect=collections.append, sample_world_batch=lambda *args: {}))
-        args = SimpleNamespace(warmup_steps=16, batch_size=4, world_horizons=[8], offline_world_fraction=0.,
+        args = SimpleNamespace(warmup_steps=16, world_batch_size=4, world_horizons=[8], offline_world_fraction=0.,
                                warmup_updates=3, warmup_collect_interval=1, collection_steps=2)
         return runtime, args, collections, updates
 

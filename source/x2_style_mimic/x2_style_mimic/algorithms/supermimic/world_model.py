@@ -1,13 +1,18 @@
+import math
+
 import torch
 from torch import nn
+from rsl_rl.modules import EmpiricalNormalization
 
 from .state import StateSpec, pack_state, unpack_state
+from .representations import GenCoordRepresentation
 from ...utils.rotation import (
     normalize_quaternion as unit_quat,
     quaternion_multiply as quat_mul,
     rotation_vector_to_quaternion as rotation_increment,
     quaternion_to_rotation_6d as quat_to_rot6d,
     quaternion_angle_error as rotation_error,
+    quaternion_to_rotation_matrix,
 )
 
 
@@ -63,12 +68,18 @@ class TargetLimiter(nn.Module):
 
 class WorldModel(nn.Module):
 
+    DYNAMICS_MODE = "gencoord_integrated_v1"
+    NORMALIZATION_MODE = "running_state_action_v1"
+
     def __init__(
         self,
         state_spec: StateSpec,
         context_dim: int,
         limiter: TargetLimiter,
         hidden_dims=(2048, 2048, 2048),
+        *,
+        dt,
+        decimation,
     ):
         """
         保存配置和约束模块：
@@ -103,40 +114,47 @@ class WorldModel(nn.Module):
         ):
             raise ValueError("输入维度和隐藏层宽度必须为正")
 
+        self.representation = GenCoordRepresentation(
+            state_spec=state_spec,
+            dt=dt,
+            decimation=decimation,
+        )
+
+        self.state_normalizer = EmpiricalNormalization(
+            self.representation.rep_state_dim
+        )
+        self.action_normalizer = EmpiricalNormalization(
+            state_spec.num_actions
+        )
+
         # 动力学网络只接收：
         # 根位置、根旋转6D、根速度、关节位置、关节速度、
         # 本步实际执行目标和物理上下文。
         #
         # 历史动作仍保存在状态中，但不输入动力学网络。
-        imput_dim = (
-            15
-            + 2 * self.spec.num_joints
-            + self.spec.num_actions
+        input_dim = (
+            self.representation.rep_state_dim
+            + state_spec.num_actions
             + self.context_dim
         )
 
-        # 根位置增量3 + 旋转向量3 + 根速度增量6
-        # + 关节位置增量J + 关节速度增量J。
-        physical_dim = (
-            12 + 2 * self.spec.num_joints
-        )
-
         layers = []             # 创建空列表，用来保存各个网络层
-        width = imput_dim       # 记录下一层的输入维度，初始为模型输入维度
+        width = input_dim       # 记录下一层的输入维度，初始为模型输入维度
 
         # 根据 hidden_dims 自动构建多层网络，并保证相邻层的维度匹配。
         for following in hidden_dims:
             layers.extend(
                 (
                     nn.Linear(width, following),
-                    nn.SiLU(),
+                    nn.LayerNorm(following),
+                    nn.GELU(),
                 )
             )
             width = following
 
         # 预测物理状态的变化量的总维度
         layers.append(
-            nn.Linear(width, physical_dim)
+            nn.Linear(width, self.representation.prediction_dim)
         )
         self.network = nn.Sequential(*layers)
 
@@ -151,33 +169,16 @@ class WorldModel(nn.Module):
 
         self.register_buffer(
             "input_mean",
-            torch.zeros(imput_dim, dtype=torch.float32),
+            torch.zeros(input_dim, dtype=torch.float32),
         )
         self.register_buffer(
             "input_std",
-            torch.ones(imput_dim, dtype=torch.float32),
+            torch.ones(input_dim, dtype=torch.float32),
         )
         # statistics统计量
         self.register_buffer(
             "stats_ready",
             torch.tensor(False, dtype=torch.bool),
-        )
-
-        # X2 初版工程尺度，不是论文超参数。
-        # 作用是把网络输出映射回各物理量的增量单位。
-        # * 重复列表，+ 拼接列表。
-        scales = (
-            [0.1] * 3                           # 根部位置增量的尺度
-            + [0.3] * 3                         # 根部旋转增量的尺度
-            + [1.0] * 3                         # 根部线速度增量的尺度
-            + [2.0] * 3                         # 根部角速度增量的尺度
-            + [0.2] * self.spec.num_joints      # 关节位置增量的尺度
-            + [2.0] * self.spec.num_joints      # 关节速度增量的尺度
-        )
-
-        self.register_buffer(
-            "delta_scale",
-            torch.as_tensor(scales, dtype=torch.float32),
         )
 
     def features(
@@ -214,13 +215,11 @@ class WorldModel(nn.Module):
 
         features = torch.cat(
             (
-                s["root_pose"][:, :3],          # 根位置
-                quat_to_rot6d(s["root_pose"][:, 3:]),  # 根旋转四元数转换为6D表示
-                s["root_velocity"],             # 根速度
-                s["joint_position"],            # 关节位置
-                s["joint_velocity"],            # 关节速度
-                target,                         # 当前处理后的目标
-                context,                        # 物理上下文
+                self.representation.represent(
+                    state
+                ),
+                target,
+                context,
             ),
             dim=-1,
         )
@@ -228,37 +227,115 @@ class WorldModel(nn.Module):
         return features, target
 
     @torch.no_grad()
-    def fit_input_stats(self, batch):
+    def update_normalization(
+        self,
+        real_states,
+        real_actions,
+        context,
+    ):
+        """仅由真实采样显式调用。
+
+        用真实采样数据更新世界模型输入的均值和标准差，供后续归一化使用。
         """
-        处理多批次数据，构造输入特征，计算并保存每一维特征的样本均值和标准差
-        """
-        states = batch["states"]
-        actions = batch["actions"]
-        contexts = batch["context"]
-        # actions.shape == (批量大小, 序列长度, 单步动作维度)
-        batch_size, horizon, _ = actions.shape
-        features, _ = self.features(
-            # 指定第一维：序列数量 × 时间步数，第二维由 PyTorch 根据元素总数自动计算
-            # buffer 的 states 有 H+1 帧，但动作只有 H 步。计算输入统计量时，应取每个动作执行前的状态，排除最后一帧。
-            state=states[:, :-1].reshape(batch_size * horizon, -1),
-            action=actions.reshape(batch_size * horizon, -1),
-            # 把上下文扩展到每个时间步，再展开成与状态、动作对应的二维输入。None 表示在这里新增一个维度，作为时间维。
-            context=contexts[:, None].expand(-1, horizon, -1).reshape(batch_size * horizon, -1),
+        features, targets = self.features(
+            real_states,
+            real_actions,
+            context,
         )
 
         if not bool(torch.isfinite(features).all()):
             raise ValueError("归一化数据包含 NaN/Inf")
 
-        # features.shape == [B * H, D]
-        # 沿样本维求平均
-        self.input_mean.copy_(
-            features.mean(dim=0)
+        if real_states.shape[0] == 0:
+            return
+
+        width = self.representation.rep_state_dim   # 局部状态表示与动作目标维度的的分界线
+        end = width + self.spec.num_actions         # 动作目标与物理上下文维度的分界线
+
+        # 物理参数只在第一次计算统计量
+        if not bool(self.stats_ready):
+            # X2 当前的 context 是原始物理参数，
+            # 先保留固定缩放，仅在首次初始化时拟合。
+            # 沿样本维计算均值和标准差：
+            self.input_mean[end:].copy_(
+                context.mean(dim=0)
+            )
+            self.input_std[end:].copy_(
+                context.std(
+                    dim=0,
+                    unbiased=False,
+                ).clamp_min(1e-3)
+            )
+
+        for normalizer, values in (
+            (
+                self.state_normalizer,
+                features[:, :width],
+            ),
+            (
+                self.action_normalizer,
+                targets,
+            ),
+        ):
+            previous_mode = normalizer.training     # 记住原来的模式。
+
+            # EmpiricalNormalization 在 eval 模式下
+            # 不更新；这里是显式的真实数据更新入口。
+            normalizer.train()      # 切到训练模式，临时打开统计更新开关。
+
+            try:
+                normalizer.update(      # 用这批真实数据更新均值、方差。
+                    values.detach()
+                )
+            finally:
+                normalizer.train(       # 恢复之前的开关状态。
+                    previous_mode
+                )
+
+        # 同步现有输入缩放接口。
+        # 与 EmpiricalNormalization.forward() 一致：
+        # (x - mean) / (std + eps)。
+        self.input_mean[:width].copy_(
+            self.state_normalizer.mean
         )
-        # 计算每个特征在所有样本中的标准差。
-        self.input_std.copy_(
-            features.std(dim=0, unbiased=False).clamp_min(1e-3)
+        self.input_std[:width].copy_(
+            self.state_normalizer.std
+            + self.state_normalizer.eps
         )
+
+        self.input_mean[width:end].copy_(
+            self.action_normalizer.mean
+        )
+        self.input_std[width:end].copy_(
+            self.action_normalizer.std
+            + self.action_normalizer.eps
+        )
+
         self.stats_ready.fill_(True)
+
+    @torch.no_grad()
+    def fit_input_stats(self, batch):
+        """用于离线数据的首次初始化。
+
+        在线训练由真实采样调用
+        update_normalization()，不重复统计 replay。
+        """
+        if bool(self.stats_ready):
+            raise RuntimeError("统计量已经初始化；真实采样应调用 update_normalization")
+
+        states = batch["states"]
+        actions = batch["actions"]
+        contexts = batch["context"]
+        # actions.shape == (批量大小, 序列长度, 单步动作维度)
+        batch_size, horizon, _ = actions.shape
+        self.update_normalization(
+            # 指定第一维：序列数量 × 时间步数，第二维由 PyTorch 根据元素总数自动计算
+            # buffer 的 states 有 H+1 帧，但动作只有 H 步。计算输入统计量时，应取每个动作执行前的状态，排除最后一帧。
+            real_states=states[:, :-1].reshape(batch_size * horizon, -1),
+            real_actions=actions.reshape(batch_size * horizon, -1),
+            # 把上下文扩展到每个时间步，再展开成与状态、动作对应的二维输入。None 表示在这里新增一个维度，作为时间维。
+            context=contexts[:, None].expand(-1, horizon, -1).reshape(batch_size * horizon, -1),
+        )
 
     def forward(
         self,
@@ -273,8 +350,6 @@ class WorldModel(nn.Module):
         if not bool(self.stats_ready):
             raise RuntimeError("输入统计量尚未准备好，请先调用 fit_input_stats")
 
-        # 将状态向量拆分为各个字段。
-        s = unpack_state(state, self.spec)
         features, target = self.features(
             state=state,
             action=action,
@@ -282,44 +357,36 @@ class WorldModel(nn.Module):
         )
         normalized = (features - self.input_mean) / self.input_std
 
-        # 将网络输出与 delta_scale 按元素相乘，得到对应物理尺度的状态增量。
-        dalta = self.network(normalized) * self.delta_scale
-
-        dp, dr, dv, dq, dqd = torch.split(
-            dalta,
-            (
-                3,                          # 根位置增量
-                3,                          # 根旋转向量增量
-                6,                          # 根速度增量
-                self.spec.num_joints,      # 关节位置增量
-                self.spec.num_joints,      # 关节速度增量
-            ),
-            dim=-1,
+        prediction = self.network(
+            normalized
         )
 
-        # dr 表示世界坐标系下的旋转增量，采用左乘。
-        orientation = unit_quat(
-            quat_mul(
-                rotation_increment(dr),             # 根旋转向量增量转换为四元数
-                unit_quat(s["root_pose"][:, 3:]),
-            ),
+        aux_state = (
+            self.representation.extract_aux_state(
+                state
+            )
+        )
+        rep_state = (
+            self.representation.represent(
+                state
+            )
         )
 
-        root_pose = torch.cat(
-            (
-                s["root_pose"][:, :3] + dp,          # 根位置增量
-                orientation,                         # 根旋转四元数
-            ),
-            dim=-1,
+        next_aux, next_rep = (
+            self.representation.apply_prediction(
+                aux_state,
+                rep_state,
+                prediction,
+            )
         )
 
-        return pack_state(
-            root_pose=root_pose,
-            root_velocity=s["root_velocity"] + dv,
-            joint_position=s["joint_position"] + dq,
-            joint_velocity=s["joint_velocity"] + dqd,
-            previous_action=action,
-            previous_target=target,
+        return (
+            self.representation.reconstruct_full_state(
+                next_aux,
+                next_rep,
+                previous_action=action,
+                previous_target=target,
+            )
         )
 
 
@@ -363,77 +430,108 @@ def dynamics_loss(
     predicted_states,
     target_states,
     state_spec,
+    *,
+    # 世界模型训练损失中各类误差的参考尺度
+    nominal_error_root_pose_pos=0.01,
+    nominal_error_root_pose_ori=0.02,
+    nominal_error_joint_pos=0.1,
+    nominal_error_joint_vel=3.14,
 ):
+    """官方广义坐标损失。
+
+    监督四组通道：
+    根位置、根旋转矩阵、关节位置、关节速度。
+
+    返回：
+    - 总加权损失。
+    - 各组未加权的原始 MSE。
+
+    第零帧是给定初态，不参与监督。
+
+    从六组改为官方广义坐标版本的四组。根速度通过积分后的根位姿获得监督，不再额外加入独立根速度损失。
+    根旋转使用旋转矩阵误差。乘上 sqrt(0.5) 后，其平方和在小角度下近似角度误差平方。
+    所有通道整体平均，不是将四组均值直接相加。
+    """
     if (
         predicted_states.shape != target_states.shape
         or predicted_states.ndim != 3
+        or predicted_states.shape[-1] != state_spec.dim
     ):
         raise ValueError("预测和目标必须同形状 [B, K+1, Ds]")
-    if predicted_states.shape[1] < 2:
-        raise ValueError("至少需要一条转移")
+    if (
+        predicted_states.shape[0] < 1
+        or predicted_states.shape[1] < 2
+    ):
+        raise ValueError("至少需要一个样本和一条转移")
 
-    # 第0帧是给定的真实起点，不计入预测损失。
-    p = unpack_state(
-        predicted_states[:, 1:].reshape(-1, state_spec.dim),
-        state_spec,
-    )
-
-    # 由真实下一步状态得到的目标状态
-    t = unpack_state(
-        target_states[:, 1:]
-        .detach()
-        .reshape(-1, state_spec.dim),
-        state_spec,
-    )
-
-    # 以下为初版误差归一化尺度，后续根据真实误差分析调整。
-    terms = {
-        "root_position": (
-            (
-                p["root_pose"][:, :3]
-                - t["root_pose"][:, :3]
-            ) / 0.05
-        ).square().mean(),
-
-        "root_rotation": (
-            rotation_error(
-                p["root_pose"][:, 3:],
-                t["root_pose"][:, 3:],
-            ) / 0.1
-        ).square().mean(),
-
-        "root_linear": (
-            (
-                p["root_velocity"][:, :3]
-                - t["root_velocity"][:, :3]
-            ) / 0.5
-        ).square().mean(),
-
-        "root_angular": (
-            (
-                p["root_velocity"][:, 3:]
-                - t["root_velocity"][:, 3:]
-            ) / 1.0
-        ).square().mean(),
-
-        "joint_position": (
-            (
-                p["joint_position"]
-                - t["joint_position"]
-            ) / 0.1
-        ).square().mean(),
-
-        "joint_velocity": (
-            (
-                p["joint_velocity"]
-                - t["joint_velocity"]
-            ) / 1.0
-        ).square().mean(),
+    scales = {
+        "root_pos": nominal_error_root_pose_pos,
+        "root_ori": nominal_error_root_pose_ori,
+        "joint_pos": nominal_error_joint_pos,
+        "joint_vel": nominal_error_joint_vel,
     }
 
-    total_loss = torch.stack(
-        list(terms.values()),
-    ).sum()
+    if any(
+        not math.isfinite(value)
+        or value <= 0
+        for value in scales.values()
+    ):
+        raise ValueError("世界模型损失的名义误差必须为有限正数")
+
+    # 第 0 帧是传入的真实初始状态，不是模型预测出来的，所以不参与预测误差计算。
+    predicted = unpack_state(
+        predicted_states[:, 1:].reshape(-1,state_spec.dim,),
+        state_spec,
+    )
+    target = unpack_state(
+        target_states[:, 1:].detach().reshape(-1, state_spec.dim,),
+        state_spec,
+    )
+
+    def blocks(fields):
+        """把各个字段拆分为监督的四组通道。"""
+        rotation = quaternion_to_rotation_matrix(
+            fields["root_pose"][:, 3:7]
+        )
+
+        return {
+            "root_pos": fields["root_pose"][:, :3],
+            "root_ori": (
+                rotation.flatten(-2, -1)
+                * math.sqrt(0.5)
+            ),
+            "joint_pos": fields["joint_position"],
+            "joint_vel": fields["joint_velocity"],
+        }
+
+    predicted_blocks = blocks(predicted)
+    target_blocks = blocks(target)
+
+    squared_errors = {
+        name: (
+            predicted_blocks[name]
+            - target_blocks[name]
+        ).square()
+        for name in scales
+    }
+
+    # 日志记录原始 MSE，便于区分各物理量误差。
+    terms = {
+        name: error.mean()
+        for name, error
+        in squared_errors.items()
+    }
+
+    # 每个通道按对应名义误差的平方缩放。
+    # 拼接后整体平均，对齐官方按通道数归约的方式。
+    total_loss = torch.cat(
+        [
+            error / scales[name] ** 2
+            for name, error
+            in squared_errors.items()
+        ],
+        dim=-1,
+    ).mean()
 
     return total_loss, terms
 

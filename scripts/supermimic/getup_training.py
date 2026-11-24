@@ -64,7 +64,8 @@ class GetupTrainingRun:
             evaluation_seconds=cfg.eval_seconds,
             training_schedule={
                 key: getattr(cfg, key) for key in (
-                    'collection_steps', 'batch_size', 'world_updates', 'discriminator_updates',
+                    'collection_steps', 'world_batch_size', 'policy_batch_size', 'amp_batch_size',
+                    'world_updates', 'discriminator_updates',
                 )
             },
         )
@@ -119,14 +120,17 @@ class GetupTrainingRun:
         metrics = self.runtime.runner.train_iteration(
             self.runtime.reference,
             collection_steps=cfg.collection_steps,
-            batch_size=cfg.batch_size,
-            world_horizon=horizon,
+            world_batch_size=cfg.world_batch_size,
+            policy_batch_size=cfg.policy_batch_size,
+            amp_batch_size=cfg.amp_batch_size,
+            world_window_frames=horizon,
             world_updates=cfg.world_updates,
             discriminator_updates=cfg.discriminator_updates,
             offline_world_replay=self.runtime.offline,
             offline_world_fraction=cfg.offline_world_fraction,
         )
-        metrics['world_horizon'] = horizon
+        metrics['world_window_frames'] = horizon
+        metrics['world_transition_steps'] = horizon - 1
         metrics['imagination_horizon'] = cfg.imagination_horizon
         metrics['imagined_task_reward'] = metrics['imagined_reward'] - metrics['reward/style']
         self.logger.record('train', iteration, metrics)
@@ -176,7 +180,7 @@ class GetupTrainingRun:
         print(f'[输出目录] {cfg.output}', flush=True)
         print(
             f"[起身实验] 初始化={runtime.metadata['initialization_mode']}，环境={cfg.num_envs}，"
-            f'模型窗口={list(cfg.world_horizons)}，策略想象={cfg.imagination_horizon}，联合训练={cfg.iterations}轮',
+            f'模型窗口帧数={list(cfg.world_horizons)}，策略想象={cfg.imagination_horizon}步，联合训练={cfg.iterations}轮',
             flush=True,
         )
         with GetupLogger(cfg, self.metadata, self.cohort) as self.logger:

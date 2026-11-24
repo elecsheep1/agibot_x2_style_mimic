@@ -38,20 +38,39 @@ class EntryConfigTests(unittest.TestCase):
     def test_default_recipe_matches_previous_explicit_command(self):
         cfg, _ = config.parse_config([])
         expected = dict(world_model_scratch=True, offline_world_fraction=0.,
-                        num_envs=16, iterations=200, batch_size=128, world_horizons=(8,), imagination_horizon=32,
+                        num_envs=16, iterations=200, world_batch_size=2048,
+                        policy_batch_size=4096, amp_batch_size=128, world_horizons=(8,), imagination_horizon=32,
                         warmup_steps=512, warmup_updates=500, warmup_collect_interval=50,
                         eval_interval=50, checkpoint_interval=50, eval_seconds=20., seed=43,
                         device='cuda:0', viz='none')
         for key, value in expected.items():
             self.assertEqual(getattr(cfg, key), value, key)
 
+    def test_policy_widths_cli_and_roundtrip(self):
+        cfg, _ = config.parse_config(['--actor-hidden-dims', '64', '32',
+                                     '--critic-hidden-dims', '32', '16'])
+        self.assertEqual(cfg.actor_hidden_dims, (64, 32))
+        self.assertEqual(cfg.critic_hidden_dims, (32, 16))
+        restored = config.GetupTrainConfig.from_mapping(cfg.to_dict())
+        self.assertEqual(restored.actor_hidden_dims, cfg.actor_hidden_dims)
+
+    def test_policy_widths_reject_invalid_values(self):
+        cfg, _ = config.parse_config([])
+        for name in ('actor_hidden_dims', 'critic_hidden_dims'):
+            original = getattr(cfg, name)
+            for invalid in ((), (0,), (-1,), (True,), (1.5,)):
+                setattr(cfg, name, invalid)
+                with self.assertRaisesRegex(ValueError, name):
+                    cfg.validate()
+            setattr(cfg, name, original)
+
     def test_file_then_command_line_overrides(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'experiment.toml'
-            path.write_text('world_model_scratch=true\niterations=10\nbatch_size=32\n')
+            path.write_text('world_model_scratch=true\niterations=10\nworld_batch_size=32\n')
             cfg, _ = config.parse_config(['--config', str(path), '--iterations', '20', '--world-horizons', '8', '16'])
         self.assertEqual(cfg.iterations, 20)
-        self.assertEqual(cfg.batch_size, 32)
+        self.assertEqual(cfg.world_batch_size, 32)
         self.assertEqual(cfg.world_horizons, (8, 16))
 
     def test_pretrained_override_clears_scratch_initialization(self):
@@ -64,14 +83,14 @@ class EntryConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)
             saved = config.read_config(config.DEFAULT_CONFIG).to_dict()
-            saved.update(output=str(path), num_envs=32, batch_size=64, warmup_updates=17,
+            saved.update(output=str(path), num_envs=32, world_batch_size=64, warmup_updates=17,
                          device=None, unused_old_launcher_flag=True)
             (path / 'arguments.json').write_text(json.dumps(saved))
             cfg, _ = config.parse_config(['--resume', str(path / 'latest.pt'), '--iterations', '400'])
             self.assertEqual(cfg.resume, path / 'latest.pt')
             self.assertFalse(cfg.world_model_scratch)
             self.assertIsNone(cfg.world_model_init)
-            self.assertEqual((cfg.num_envs, cfg.batch_size, cfg.warmup_updates), (32, 64, 17))
+            self.assertEqual((cfg.num_envs, cfg.world_batch_size, cfg.warmup_updates), (32, 64, 17))
             self.assertEqual(cfg.iterations, 400)
             self.assertEqual(cfg.device, 'cuda:0')
             self.assertIsNone(cfg.output)
@@ -96,13 +115,15 @@ class EntryConfigTests(unittest.TestCase):
         cfg, _ = config.parse_config([
             '--world-model-scratch', '--world-hidden-dims', '512', '512', '512',
             '--offline-world-fraction', '0', '--num-envs', '16', '--iterations', '200',
-            '--batch-size', '128', '--world-horizons', '8', '--imagination-horizon', '32',
+            '--world-batch-size', '128', '--policy-batch-size', '128', '--amp-batch-size', '128',
+            '--world-horizons', '8', '--imagination-horizon', '32',
             '--warmup-steps', '512', '--warmup-updates', '500', '--warmup-collect-interval', '50',
             '--eval-interval', '50', '--checkpoint-interval', '50', '--eval-seconds', '20',
             '--seed', '43', '--device', 'cuda:0', '--viz', 'none',
         ])
         expected = config.read_config(config.DEFAULT_CONFIG).to_dict()
         expected['world_hidden_dims'] = [512, 512, 512]
+        expected.update(world_batch_size=128, policy_batch_size=128, amp_batch_size=128)
         self.assertEqual(cfg.to_dict(), expected)
 
 

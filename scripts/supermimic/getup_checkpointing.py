@@ -7,6 +7,19 @@ import numpy as np
 import torch
 
 
+def collect_optimizers(trainer, discriminator):
+    """逐个保存官方分组优化器；兼容迁移前的单 Adam 入口。"""
+    result = {'discriminator': discriminator.optimizer}
+    for group in ('world', 'actor', 'critic'):
+        grouped = getattr(trainer, group + '_optimizers', None)
+        if grouped is None:
+            result[group] = getattr(trainer, group + '_optimizer')
+        else:
+            for index, optimizer in enumerate(grouped):
+                result[f'{group}/{index}'] = optimizer
+    return result
+
+
 def save_checkpoint(path, runtime, iteration, cohort, metadata):
     payload = dict(kind='supermimic_getup_training', iteration=iteration,
         warmup_complete=getattr(runtime, 'warmup_complete', True),

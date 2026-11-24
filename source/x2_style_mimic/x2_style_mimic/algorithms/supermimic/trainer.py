@@ -6,6 +6,7 @@ import math
 import torch
 
 from .batches import detach_world_batch
+from .optimizers import build_optimizers
 
 from .gradients import frozen_parameters
 from .objectives import (
@@ -33,6 +34,11 @@ class TrainerCfg:
     actor_learning_rate: float = 2e-4
     critic_learning_rate: float = 2e-4
 
+    nominal_error_root_pose_pos: float = 0.01
+    nominal_error_root_pose_ori: float = 0.02
+    nominal_error_joint_pos: float = 0.1
+    nominal_error_joint_vel: float = 3.14
+
     # 梯度范数裁剪阈值
     gradient_norm: float = 1.0
     actor_gradient_value: float = 0.1
@@ -43,6 +49,8 @@ class TrainerCfg:
 
 class SuperMimicTrainer:
     """训练世界模型、AMP 判别器、actor 和 critic。"""
+
+    OPTIMIZER_MODE = "muon_adam_v1"
 
     def __init__(
         self,
@@ -87,13 +95,33 @@ class SuperMimicTrainer:
         ):
             raise ValueError("折扣因子 gamma 必须在 [0, 1)，lambda 必须在 [0, 1]")
         if min(
+            cfg.nominal_error_root_pose_pos,
+            cfg.nominal_error_root_pose_ori,
+            cfg.nominal_error_joint_pos,
+            cfg.nominal_error_joint_vel,
             cfg.world_learning_rate,
             cfg.actor_learning_rate,
             cfg.critic_learning_rate,
             cfg.gradient_norm,
             cfg.actor_gradient_value,
         ) <= 0:
-            raise ValueError("学习率和梯度裁剪阈值必须为正")
+            raise ValueError("学习率、梯度裁剪阈值和世界模型名义误差必须为正")
+
+        max_step_reward = float(
+            self.task.max_step_reward
+        )
+
+        if (
+            not math.isfinite(max_step_reward)
+            or max_step_reward < 0.0
+        ):
+            raise ValueError("任务单步奖励上限必须为有限非负数")
+
+        # 计算累计折扣回报的理论上限。
+        self.value_max = (
+            max_step_reward
+            / (1.0 - cfg.gamma)
+        )
 
         # 读取世界模型第一个参数所在的设备，并保存到 self.device
         # next() 的意思是：从迭代器中取出下一个元素。
@@ -101,26 +129,17 @@ class SuperMimicTrainer:
             world_model.parameters()
         ).device
 
-        self.world_optimizer = torch.optim.Adam(
-            world_model.parameters(),
+        self.world_optimizers = build_optimizers(
+            world_model,
             lr=cfg.world_learning_rate,
         )
-        """
-        betas=(0.9, 0.95)  表示两个梯度统计量的指数滑动平均系数：
-        - β₁ = 0.9：用于记录梯度的平均趋势，类似动量。
-        - β₂ = 0.95：用于记录梯度平方的平均水平，帮助调整各参数的更新步长。
-        这两个参数的选择是经验性的，通常在训练深度神经网络时表现良好。
-        m_t = 0.9 × m_{t-1} + 0.1 × 当前梯度
-        v_t = 0.95 × v_{t-1} + 0.05 × 当前梯度²
-        """
-        self.actor_optimizer = torch.optim.Adam(
-            actor.parameters(),
+        self.actor_optimizers = build_optimizers(
+            actor,
             lr=cfg.actor_learning_rate,
             betas=(0.9, 0.95),
         )
-
-        self.critic_optimizer = torch.optim.Adam(
-            critic.parameters(),
+        self.critic_optimizers = build_optimizers(
+            critic,
             lr=cfg.critic_learning_rate,
         )
 
@@ -143,9 +162,10 @@ class SuperMimicTrainer:
             self.world_model.fit_input_stats(data)
 
         # 清除世界模型上一步的梯度，设为 None，避免本次反向传播时累加旧梯度。
-        self.world_optimizer.zero_grad(
-            set_to_none=True,
-        )
+        for optimizer in self.world_optimizers:
+            optimizer.zero_grad(
+                set_to_none=True,
+            )
 
         rollout = rollout_logged_actions(
             model=self.world_model,
@@ -158,6 +178,11 @@ class SuperMimicTrainer:
             predicted_states=rollout,
             target_states=data["states"],       # 训练的是世界模型：让它预测的状态尽量接近环境中实际发生的状态。
             state_spec=self.world_model.spec,
+
+            nominal_error_root_pose_pos=(self.cfg.nominal_error_root_pose_pos),
+            nominal_error_root_pose_ori=(self.cfg.nominal_error_root_pose_ori),
+            nominal_error_joint_pos=(self.cfg.nominal_error_joint_pos),
+            nominal_error_joint_vel=(self.cfg.nominal_error_joint_vel),
         )
 
         if not bool(torch.isfinite(loss)):
@@ -172,11 +197,13 @@ class SuperMimicTrainer:
             error_if_nonfinite=True,
         )
 
-        self.world_optimizer.step()
+        for optimizer in self.world_optimizers:
+            optimizer.step()
 
-        self.world_optimizer.zero_grad(
-            set_to_none=True,
-        )
+        for optimizer in self.world_optimizers:
+            optimizer.zero_grad(
+                set_to_none=True,
+            )
 
         return {
             "world_loss": float(loss.detach()),
@@ -220,15 +247,18 @@ class SuperMimicTrainer:
         history = history.detach().to(self.device)
         context = context.detach().to(self.device)
         goals = goals.detach().to(self.device)
-        self.actor_optimizer.zero_grad(
-            set_to_none=True,
-        )
-        self.world_optimizer.zero_grad(
-            set_to_none=True,
-        )
-        self.critic_optimizer.zero_grad(
-            set_to_none=True,
-        )
+        for optimizer in self.world_optimizers:
+            optimizer.zero_grad(
+                set_to_none=True,
+            )
+        for optimizer in self.actor_optimizers:
+            optimizer.zero_grad(
+                set_to_none=True,
+            )
+        for optimizer in self.critic_optimizers:
+            optimizer.zero_grad(
+                set_to_none=True,
+            )
         self.style.discriminator.optimizer.zero_grad(
             set_to_none=True,
         )
@@ -259,6 +289,8 @@ class SuperMimicTrainer:
                 trajectory.states[-1],
                 context,
                 trajectory.goals[-1],
+            ).clamp(
+                max=self.value_max,
             )
 
             loss = imagined_actor_loss(
@@ -288,7 +320,8 @@ class SuperMimicTrainer:
                     self.cfg.actor_gradient_value,
                 )
 
-        self.actor_optimizer.step()
+        for optimizer in self.actor_optimizers:
+            optimizer.step()
 
         metrics = {
             "actor_loss": float(loss.detach()),
@@ -361,6 +394,8 @@ class SuperMimicTrainer:
                 values=values,
                 gamma=self.cfg.gamma,
                 lam=self.cfg.lam,
+            ).clamp(
+                max=self.value_max,
             ).flatten()
 
         # s_H 只参与 bootstrap。
@@ -380,16 +415,19 @@ class SuperMimicTrainer:
         losses = []
         norms = []
 
-        # 每轮训练
-        for _ in range(self.cfg.critic_epochs):
-            # 每轮随机打乱样本索引
-            order = torch.randperm(
-                sample_count,
-                device=self.device,
-            )
+        # 同一批想象轨迹只打乱一次。
+        order = torch.randperm(
+            sample_count,
+            device=self.device,
+        )
 
-            # 把索引拆成小批次
-            for indexes in order.chunk(minibatches):
+        minibatch_indexes = order.chunk(
+            minibatches,
+        )
+
+        # 多轮拟合复用相同的小批次划分。
+        for _ in range(self.cfg.critic_epochs):
+            for indexes in minibatch_indexes:
                 # Critic（C 网络）输出的状态价值预测：
                 predictions = self.critic(
                     flat_states[indexes],
@@ -405,9 +443,10 @@ class SuperMimicTrainer:
                 if not bool(torch.isfinite(loss)):
                     raise RuntimeError("Critic 损失包含 NaN/Inf")
 
-                self.critic_optimizer.zero_grad(
-                    set_to_none=True,
-                )
+                for optimizer in self.critic_optimizers:
+                    optimizer.zero_grad(
+                        set_to_none=True,
+                    )
 
                 loss.backward()
 
@@ -417,7 +456,8 @@ class SuperMimicTrainer:
                     error_if_nonfinite=True,
                 )
 
-                self.critic_optimizer.step()
+                for optimizer in self.critic_optimizers:
+                    optimizer.step()
 
                 # 存的是每个小批次的损失和梯度范数
                 losses.append(
@@ -427,9 +467,10 @@ class SuperMimicTrainer:
                     float(norm)
                 )
 
-        self.critic_optimizer.zero_grad(
-            set_to_none=True,
-        )
+        for optimizer in self.critic_optimizers:
+            optimizer.zero_grad(
+                set_to_none=True,
+            )
 
         return {
             # losses、norms 都是浮点数列表：

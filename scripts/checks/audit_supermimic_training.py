@@ -85,7 +85,14 @@ def audit_predictions(env, trainer, context, batch_size, seed):
                                   context, device=env.device, command_dim=command_dim)
     runner = SuperMimicRunner(env, trainer, replay, command_name, action_noise_std=0.1)
     before = module_state(trainer.world_model)
-    collection = runner.collect(96)
+    update_normalization = getattr(trainer.world_model, 'update_normalization', None)
+    try:
+        if update_normalization is not None:
+            trainer.world_model.update_normalization = lambda *args: None
+        collection = runner.collect(96)
+    finally:
+        if update_normalization is not None:
+            trainer.world_model.update_normalization = update_normalization
     # Same starts for all horizons; sampler excludes cross-episode windows.
     batch = replay.sample_windows(batch_size, horizon=32)
     truth = batch['states']

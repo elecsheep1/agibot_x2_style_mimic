@@ -13,12 +13,21 @@ class SuperMimicWorldModelCfg:
         2048,
     )
 
-    # 连续真实转移的监督窗口。
+    # 每次模型更新采样的窗口数。
+    batch_size: int = 2048
+    # 连续状态帧数；8 帧对应 7 条监督转移。
     # 多个长度时，按联合训练轮次循环选择。
     horizons: tuple[int, ...] = (8,)
 
     updates_per_iteration: int = 10
     learning_rate: float = 2e-4
+
+    # 名义误差决定损失权重：weight = 1 / error²。
+    # 它们不是任务成功或站稳判据。
+    nominal_error_root_pose_pos: float = 0.01
+    nominal_error_root_pose_ori: float = 0.02
+    nominal_error_joint_pos: float = 0.1
+    nominal_error_joint_vel: float = 3.14
 
 
 
@@ -27,6 +36,21 @@ class SuperMimicWorldModelCfg:
 class SuperMimicPolicyCfg:
     """想象轨迹中的 actor 和 critic 更新。"""
 
+    # 对齐当前核对的官方默认网络宽度。
+    actor_hidden_dims: tuple[int, ...] = (
+        2048,
+        1024,
+        512,
+        256,
+    )
+
+    critic_hidden_dims: tuple[int, ...] = (
+        256,
+        128,
+    )
+
+    # 每次 actor 更新的想象轨迹数量。
+    batch_size: int = 4096
     # 用世界模型展开的想象轨迹长度。
     imagination_horizon: int = 32
 
@@ -51,6 +75,8 @@ class SuperMimicPolicyCfg:
 class SuperMimicAMPCfg:
     """AMP 判别器的独立优化配置。"""
 
+    # AMP 判别器单独使用的批量。
+    batch_size: int = 128
     updates_per_iteration: int = 4
 
     # 与当前 AMPWindowDiscriminator 默认值一致。
@@ -105,10 +131,6 @@ class SuperMimicRunnerCfg:
 
     # 每个环境最多保存的转移步数。
     replay_steps: int = 2048
-
-    # 当前实现对世界模型、actor 和判别器
-    # 使用同一个采样批量大小。
-    batch_size: int = 128
 
     # 只用于真实采样的高斯探索噪声。
     action_noise: float = 0.1

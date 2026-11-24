@@ -2,6 +2,46 @@ import torch
 from torch import nn
 
 
+def build_mlp(
+    input_dim,
+    hidden_dims,
+    output_dim,
+):
+    """构建 Linear → LayerNorm → GELU 隐藏层。"""
+    hidden_dims = tuple(hidden_dims)
+
+    if (
+        not hidden_dims
+        or any(
+            type(width) is not int
+            or width <= 0
+            for width in hidden_dims
+        )
+    ):
+        raise ValueError(
+            "隐藏层宽度必须为非空的正整数序列"
+        )
+
+    layers = []
+    current_dim = input_dim
+
+    for width in hidden_dims:
+        layers.extend(
+            [
+                nn.Linear(current_dim, width),
+                nn.LayerNorm(width),            # 对每条样本的隐藏特征做归一化，帮助控制隐藏层数值尺度
+                nn.GELU(),
+            ]
+        )
+        current_dim = width
+
+    layers.append(
+        nn.Linear(current_dim, output_dim)
+    )
+
+    return nn.Sequential(*layers)
+
+
 class GoalConditionedActor(nn.Module):
     """目标条件化的 actor 模型,用于生成动作。输出范围由动作标定和关节限位共同确定。"""
 
@@ -13,6 +53,7 @@ class GoalConditionedActor(nn.Module):
         *,
         action_lower,
         action_upper,
+        hidden_dims=(512, 256, 128),
     ):
         super().__init__()
 
@@ -39,14 +80,10 @@ class GoalConditionedActor(nn.Module):
         self.register_buffer("action_lower", lower)
         self.register_buffer("action_upper", upper)
 
-        self.network = nn.Sequential(
-            nn.Linear(observation_dim + goal_dim, 512),
-            nn.ELU(),
-            nn.Linear(512, 256),
-            nn.ELU(),
-            nn.Linear(256, 128),
-            nn.ELU(),
-            nn.Linear(128, num_actions),
+        self.network = build_mlp(
+            input_dim=observation_dim + goal_dim,
+            hidden_dims=hidden_dims,
+            output_dim=num_actions,
         )
 
         # 初始化网络最后一层的权重和偏置，让网络初始输出接近 0。
@@ -84,6 +121,8 @@ class GoalConditionedCritic(nn.Module):
         context_dim,
         goal_dim,
         task_context_dim=0, # 任务条件化的上下文维度,默认为 0。
+        *,
+        hidden_dims=(256, 128),
     ):
         super().__init__()
 
@@ -100,12 +139,10 @@ class GoalConditionedCritic(nn.Module):
         )
 
 
-        self.network = nn.Sequential(
-            nn.Linear(input_dim, 256),
-            nn.ELU(),
-            nn.Linear(256, 128),
-            nn.ELU(),
-            nn.Linear(128, 1),
+        self.network = build_mlp(
+            input_dim=input_dim,
+            hidden_dims=hidden_dims,
+            output_dim=1,
         )
 
         nn.init.zeros_(self.network[-1].weight)

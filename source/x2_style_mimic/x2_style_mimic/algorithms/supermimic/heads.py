@@ -194,6 +194,15 @@ class GetupTask(nn.Module):
 
         return proximity.sum(dim=-1)
 
+    @property
+    def max_step_reward(self):
+        """包含 AMP 在内的单步总奖励理论上限。"""
+        # 当前 standing_quality 和 AMP 风格奖励都在 [0, 1]。
+        return self.cfg.step_dt * (
+            self.cfg.standing_weight
+            + self.cfg.style_weight
+        )
+
     def standing_quality(self, state):
         """根据预测状态计算几何姿态与速度稳定性。"""
         fields = unpack_state(state, self.spec)

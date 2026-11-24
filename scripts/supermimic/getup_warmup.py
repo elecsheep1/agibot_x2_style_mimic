@@ -19,16 +19,16 @@ def warmup_world_model(runtime, args, record):
     world = runtime.trainer.world_model
     if not bool(world.stats_ready):
         batch = runtime.runner.sample_world_batch(
-            max(args.batch_size, 2048), args.world_horizons[0], runtime.offline, args.offline_world_fraction)
+            args.world_batch_size, args.world_horizons[0] - 1, runtime.offline, args.offline_world_fraction)
         world.fit_input_stats(batch)
         print(f'[预热] 已由真实数据初始化世界模型输入统计量，维度={world.input_mean.numel()}', flush=True)
 
     for update in range(args.warmup_updates):
         if update > 0 and update % args.warmup_collect_interval == 0:
             runtime.runner.collect(args.collection_steps)
-        horizon = args.world_horizons[update % len(args.world_horizons)]
+        horizon = args.world_horizons[update % len(args.world_horizons)] - 1
         batch = runtime.runner.sample_world_batch(
-            args.batch_size, horizon, runtime.offline, args.offline_world_fraction)
+            args.world_batch_size, horizon, runtime.offline, args.offline_world_fraction)
         metrics = runtime.trainer.update_world_model(batch)
         record('warmup', update + 1, metrics)
         if update == 0 or (update + 1) % 25 == 0 or update + 1 == args.warmup_updates:

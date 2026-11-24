@@ -1,0 +1,21 @@
+# 继承 source 中当前 runner cfg，仅缩小本次流程验证的计算量。
+run_name = "getup_official_alignment_smoke"
+world_model_scratch = true
+offline_world_fraction = 0.0
+num_envs = 16
+iterations = 2
+collection_steps = 8
+world_batch_size = 32
+policy_batch_size = 32
+amp_batch_size = 32
+world_horizons = [8]
+imagination_horizon = 32
+world_updates = 1
+discriminator_updates = 1
+warmup_steps = 64
+warmup_updates = 20
+warmup_collect_interval = 10
+eval_interval = 2
+eval_seconds = 2.0
+checkpoint_interval = 2
+log_interval = 1

@@ -1,5 +1,6 @@
 """CPU dynamics regressions; no simulator or project task imports required."""
 import importlib.util
+import inspect
 from pathlib import Path
 import sys
 from types import ModuleType
@@ -109,7 +110,8 @@ class WorldModelTests(unittest.TestCase):
         out = self.rollout(self.actions)
         target = self.batch['states'].clone().requires_grad_()
         loss, terms = wm.dynamics_loss(out, target, self.spec)
-        self.assertEqual(len(terms), 6)
+        expected = 4 if 'nominal_error_root_pose_pos' in inspect.signature(wm.dynamics_loss).parameters else 6
+        self.assertEqual(len(terms), expected)
         self.assertTrue(bool(torch.isfinite(loss)))
         loss.backward()
         grads = [p.grad for p in self.model.network.parameters()]
