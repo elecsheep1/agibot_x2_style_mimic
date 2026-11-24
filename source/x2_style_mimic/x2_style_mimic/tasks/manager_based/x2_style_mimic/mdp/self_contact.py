@@ -11,6 +11,15 @@ from .rewards import (
     self_contact_control_cost,
 )
 
+GROUND_CONTACT_SENSOR_NAMES = (
+    "head_yaw_ground_contact",
+    "head_pitch_ground_contact",
+    "left_foot_ground_contact",
+    "right_foot_ground_contact",
+    "left_hand_ground_contact",
+    "right_hand_ground_contact",
+)
+
 
 class SelfContactSensor(SensorBase):
     """同环境机器人自接触监测，不包含地面"""
@@ -446,3 +455,58 @@ class SelfContactSensor(SensorBase):
         self._view = None
         super()._invalidate_initialize_callback(event)
 
+
+@torch.no_grad()
+def reset_ground_contact_sensors(
+    env,
+    env_ids,
+):
+    """重置指定环境的地面接触数据及过滤接触历史。"""
+    env_ids = torch.as_tensor(
+        env_ids,
+        dtype=torch.long,
+        device=env.device,
+    )
+
+    if env_ids.numel() == 0:
+        return
+
+    for name in GROUND_CONTACT_SENSOR_NAMES:
+        sensor = env.scene.sensors[name]
+
+        # 先执行传感器正常的重置流程。
+        sensor.reset(env_ids)
+
+        # 读取 data 可能触发懒更新。
+        history = (
+            sensor.data.force_matrix_w_history
+        )
+
+        if history is None:
+            raise RuntimeError(
+                f"{name} 缺少过滤地面接触力历史"
+            )
+
+        forces = (
+            history.torch
+            if hasattr(history, "torch")
+            else history
+        )
+
+        if (
+            forces.ndim != 5
+            or forces.shape[0] != env.num_envs
+            or forces.shape[2:] != (1, 1, 3)
+        ):
+            raise RuntimeError(
+                f"{name} 的过滤接触历史形状不正确："
+                f"{tuple(forces.shape)}"
+            )
+
+        # 当前 PhysX 后端 reset 遗漏了这个缓冲。
+        # 使用索引赋值，确保修改原始缓冲。
+        forces[env_ids] = 0.0
+
+        # 上面读取 data 可能重新填入旧物理帧的当前力。
+        # 再重置当前缓冲和时间戳；过滤历史保持为零。
+        sensor.reset(env_ids)

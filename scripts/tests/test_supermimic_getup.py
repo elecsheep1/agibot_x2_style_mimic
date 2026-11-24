@@ -1,5 +1,6 @@
 """Regressions for get-up semantics: lying is valid, empty goals and differentiable reward."""
 import unittest
+from dataclasses import replace
 from unittest.mock import patch
 from types import SimpleNamespace
 
@@ -57,7 +58,7 @@ class GetUpTests(unittest.TestCase):
                                     torch.empty(2, 0), torch.zeros(2))
         torch.testing.assert_close(terms['out_of_bounds'], torch.tensor([0., -5.]), atol=0, rtol=0)
 
-    def test_head_proxy_has_no_positive_clearance_tail(self):
+    def test_head_proxy_compact_support_single_count_and_gradient(self):
         class Geometry(torch.nn.Module):
             def forward(self, states):
                 return states[:, :6]
@@ -65,15 +66,45 @@ class GetUpTests(unittest.TestCase):
         self.task.contact_geometry = Geometry()
         try:
             states = self.standing.clone()
-            states[:, 4:6] = torch.tensor([[.01, .001], [-.0025, -.005]])
+            cutoff = self.task.cfg.head_contact_distance
+            width = self.task.cfg.head_contact_transition
+            states[:, 4:6] = torch.tensor([
+                [cutoff + .01, cutoff + .001],
+                [cutoff - .5 * width, cutoff - .2 * width],
+            ])
             states.requires_grad_()
             cost = self.task.head_contact_cost(states)
-            torch.testing.assert_close(cost, torch.tensor([0., 1.5]))
+            torch.testing.assert_close(cost, torch.tensor([0., .5]))
             cost.sum().backward()
             self.assertLess(float(states.grad[1, 4]), 0.)
             self.assertTrue(bool(torch.isfinite(states.grad).all()))
+            states = self.standing.clone()
+            states[:, 4:6] = cutoff - width - .01
+            torch.testing.assert_close(self.task.head_contact_cost(states), torch.ones(2))
         finally:
             self.task.contact_geometry = original
+
+    def test_head_distance_candidate_values_and_lifting_gradient(self):
+        class Geometry(torch.nn.Module):
+            def forward(self, states):
+                return states[:, :6]
+        original_geometry, original_cfg = self.task.contact_geometry, self.task.cfg
+        self.task.contact_geometry = Geometry()
+        self.task.cfg = replace(self.task.cfg, head_contact_distance=.005,
+                                head_contact_transition=.010)
+        try:
+            distances = torch.tensor([.010, .005, .0025, 0., -.00025, -.0025, -.005])
+            states = self.standing[:1].repeat(len(distances), 1)
+            states[:, 4] = distances
+            states[:, 5] = .02
+            states.requires_grad_()
+            cost = self.task.head_contact_cost(states)
+            torch.testing.assert_close(cost, torch.tensor([0., 0., .15625, .5, .53746875, .84375, 1.]))
+            cost.sum().backward()
+            self.assertTrue(bool((states.grad[2:6, 4] < 0).all()))
+            self.assertTrue(bool(torch.isfinite(states.grad).all()))
+        finally:
+            self.task.contact_geometry, self.task.cfg = original_geometry, original_cfg
 
     def test_standing_quality_and_height_gradient(self):
         low = self.standing.clone()

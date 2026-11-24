@@ -7,6 +7,7 @@ import numpy as np
 import torch
 
 from getup_runtime import tensor
+from head_diagnostics import head_snapshot, summarize_head_trace, physical_head_geometry, reset_evaluation_sensors
 
 
 @contextmanager
@@ -69,6 +70,47 @@ def geometric_stable(fields, torso_up, knee_ids):
             & (fields['joint_position'][:, knee_ids].abs().amax(-1) <= 1.5))
 
 
+def actual_reward_terms(env, actual_reward):
+    """读取本步加权奖励；当前 IsaacLab 缓冲保存的是未乘 dt 的奖励率。"""
+    manager = env.reward_manager
+    names = tuple(manager.active_terms)
+    values = manager._step_reward.detach().clone() * env.step_dt
+    if values.shape != (env.num_envs, len(names)):
+        raise RuntimeError('RewardManager 分项缓冲形状不兼容')
+    torch.testing.assert_close(values.sum(-1), actual_reward, atol=2e-5, rtol=2e-5)
+    return {name: values[:, i] for i, name in enumerate(names)}
+
+
+class RewardTermTotals:
+    """累计首回合分项回报，不纳入自动重置后回合。"""
+
+    def __init__(self, count, device):
+        self.count, self.device = count, device
+        self.real, self.proxy = {}, {}
+
+    def update(self, active, real, proxy):
+        for destination, terms in ((self.real, real), (self.proxy, proxy)):
+            for name, value in terms.items():
+                if value.shape != (self.count,) or not bool(torch.isfinite(value).all()):
+                    raise RuntimeError(f'评估奖励分项形状或数值无效：{name}')
+                if name not in destination:
+                    destination[name] = torch.zeros(self.count, device=self.device)
+                destination[name] += torch.where(active, value, 0.)
+
+    def metrics(self, mask):
+        result = {f'real_terms/{name}': float(value[mask].mean())
+                  for name, value in self.real.items()}
+        result.update({f'proxy_terms/{name}': float(value[mask].mean())
+                       for name, value in self.proxy.items()})
+        aliases = {'standing': 'standing', 'head_contact': 'head_contact',
+                   'action_rate': 'action_rate', 'joint_pos_limits': 'joint_limits',
+                   'joint_acc': 'joint_acc', 'out_of_bounds_failure': 'out_of_bounds'}
+        for real, proxy in aliases.items():
+            if real in self.real and proxy in self.proxy:
+                result[f'term_gaps/{real}'] = float((self.real[real][mask] - self.proxy[proxy][mask]).mean())
+        return result
+
+
 class TaskEvaluationTotals:
     """只累计每个环境首回合，使用环境重置前的任务快照。"""
 
@@ -110,6 +152,8 @@ def evaluate(runtime, cohort, seconds, seed):
             pose[:, :3] += env.scene.env_origins
             _write_reference_state(env, ids, env.scene['robot'], pose, states['root_velocity'], states['joint_pos'], states['joint_vel'])
             env.action_manager.reset(ids)
+            # 固定 cohort 会在 env.reset 后再次设置姿态，旧传感器历史不能沿用。
+            reset_evaluation_sensors(env, ids)
             env._getup_birth_types[ids] = cohort['birth_types']
             env._getup_reference_motion_ids[ids] = cohort['motion_ids']
             env._getup_reference_frame_ids[ids] = cohort['frame_ids']
@@ -124,6 +168,7 @@ def evaluate(runtime, cohort, seconds, seed):
             style.eval()
             active = torch.ones(n, dtype=torch.bool, device=device)
             task_totals = TaskEvaluationTotals(n, device)
+            term_totals = RewardTermTotals(n, device)
             required_hold = float(env.cfg.terminations.progress.params['hold_time'])
             steps = torch.zeros(n, device=device)
             quality_sum, task_return, total_return, style_sum, style_count = [torch.zeros(n, device=device) for _ in range(5)]
@@ -134,12 +179,17 @@ def evaluate(runtime, cohort, seconds, seed):
             last_state = current.clone()
             timeout_count = failure_count = 0
             traces = []
+            head_trace = []
             for step in range(math.ceil(seconds / dt)):
                 mask = active.clone()
                 action = actor(trainer.proprioception(history), torch.empty(n, 0, device=device))
                 action[~active] = 0
                 _, actual_reward, terminated, truncated, extras = env.step(action)
+                real_terms = actual_reward_terms(env, actual_reward)
                 following = extras['world_model']['next_state']
+                head_sample = head_snapshot(env, trainer.task, following, mask & ~(terminated | truncated))
+                head_sample.update(physical_head_geometry(env, trainer.task, following))
+                head_trace.append(dict(time_s=(step + 1) * dt, **head_sample))
                 if not bool(torch.isfinite(following).all()):
                     raise RuntimeError('真实评估状态包含 NaN/Inf')
                 history = torch.cat((history[:, 1:], following[:, None]), 1)
@@ -148,7 +198,8 @@ def evaluate(runtime, cohort, seconds, seed):
                 eligible = step + 2 >= amp_history.shape[1]
                 style_reward = style.evaluate(amp_history) if eligible else torch.zeros(n, device=device)
                 goals = torch.empty(n, 0, device=device)
-                raw_task, _ = trainer.task.reward(current, action, following, goals, torch.zeros_like(style_reward))
+                raw_task, proxy_terms = trainer.task.reward(current, action, following, goals, torch.zeros_like(style_reward))
+                term_totals.update(mask, real_terms, proxy_terms)
                 raw_total, _ = trainer.task.reward(current, action, following, goals, style_reward)
                 task_totals.update(mask, actual_reward, raw_task, extras['getup_progress'])
                 quality = trainer.task.standing_quality(following)
@@ -183,6 +234,8 @@ def evaluate(runtime, cohort, seconds, seed):
             per_env = []
             for i in range(n):
                 per_env.append(dict(env_id=i, birth_type=int(cohort['birth_types'][i]), motion_id=int(cohort['motion_ids'][i]),
+                    real_reward_terms={name: float(value[i]) for name, value in term_totals.real.items()},
+                    proxy_reward_terms={name: float(value[i]) for name, value in term_totals.proxy.items()},
                     frame_id=int(cohort['frame_ids'][i]), geometric_success=bool(succeeded[i]),
                     geometric_stable_at_end=bool(final_hold[i] >= 3.), max_hold_seconds=float(max_hold[i]),
                     final_hold_seconds=float(final_hold[i]), first_success_seconds=float(first[i]),
@@ -213,13 +266,18 @@ def evaluate(runtime, cohort, seconds, seed):
                     geometric_stable_at_end_rate=float((final_hold[mask] >= 3.).float().mean()),
                     max_hold_seconds=float(max_hold[mask].mean()), final_hold_seconds=float(final_hold[mask].mean()))
             metrics = stats([True] * n)
+            metrics.update(term_totals.metrics(torch.ones(n, dtype=torch.bool, device=device)))
             for kind, name in [(0, 'reference_initial'), (2, 'reference_rsi')]:
                 mask = (cohort['birth_types'] == kind).tolist()
                 if any(mask):
                     metrics.update({name + '/' + key: value for key, value in stats(mask).items()})
+                    metrics.update({name + '/' + key: value for key, value in term_totals.metrics(torch.tensor(mask, device=device)).items()})
             metrics.update(timeouts=timeout_count, failures=failure_count)
+            metrics.update({f'head_diagnostic/{key}': value for key, value in summarize_head_trace(head_trace).items()})
             report = dict(metrics=metrics, per_env=per_env, trace=traces, duration_limit_s=seconds,
-                          schema_version=2, contact_conditions_checked=True,
+                          head_contact_trace=head_trace,
+                          head_diagnostic_note='每控制步采样；valid 排除自动重置及已结束回合。current 与 history 标签分别按实际力阈值生成；proxy 不表示牛顿力。',
+                          schema_version=3, contact_conditions_checked=True,
                           note='task_* 使用原起身环境的完整成功判据，含双脚接触；geometric_* 仅为几何辅助诊断。real_task_return 为 RewardManager 返回值，不含 AMP；recomputed_* 为想象公式在真实状态上的重算值，其中 total 包含未门控风格奖励。评估只统计各环境首回合；达到评估时长不代表完整回合结束。')
     finally:
         actor.train(actor_mode)

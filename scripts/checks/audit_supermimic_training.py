@@ -85,14 +85,18 @@ def audit_predictions(env, trainer, context, batch_size, seed):
                                   context, device=env.device, command_dim=command_dim)
     runner = SuperMimicRunner(env, trainer, replay, command_name, action_noise_std=0.1)
     before = module_state(trainer.world_model)
+    proprio_before = module_state(trainer.proprioception)
+    proprio_update = trainer.proprioception.update_normalization
     update_normalization = getattr(trainer.world_model, 'update_normalization', None)
     try:
         if update_normalization is not None:
-            trainer.world_model.update_normalization = lambda *args: None
+            trainer.world_model.update_normalization = lambda *args, **kwargs: None
+        trainer.proprioception.update_normalization = lambda *args, **kwargs: None
         collection = runner.collect(96)
     finally:
         if update_normalization is not None:
             trainer.world_model.update_normalization = update_normalization
+        trainer.proprioception.update_normalization = proprio_update
     # Same starts for all horizons; sampler excludes cross-episode windows.
     batch = replay.sample_windows(batch_size, horizon=32)
     truth = batch['states']
@@ -104,7 +108,23 @@ def audit_predictions(env, trainer, context, batch_size, seed):
         result[str(horizon)] = dict(seconds=horizon * env.step_dt,
                                    model=prediction_errors(predicted[:, horizon], truth[:, horizon], spec),
                                    persistence=prediction_errors(truth[:, 0], truth[:, horizon], spec))
+    for horizon in (1, 8, 32):
+        goals = truth.new_empty((batch_size, 0))
+        style_zero = truth.new_zeros(batch_size)
+        predicted_reward, predicted_terms = trainer.task.reward(
+            predicted[:, horizon - 1], batch['actions'][:, horizon - 1],
+            predicted[:, horizon], goals, style_zero)
+        real_reward, real_terms = trainer.task.reward(
+            truth[:, horizon - 1], batch['actions'][:, horizon - 1],
+            truth[:, horizon], goals, style_zero)
+        result[str(horizon)]['task_reward_proxy'] = dict(
+            predicted_mean=float(predicted_reward.mean()), real_state_mean=float(real_reward.mean()),
+            mean_absolute_error=float((predicted_reward - real_reward).abs().mean()),
+            bias=float((predicted_reward - real_reward).mean()),
+            standing_mean_absolute_error=float((predicted_terms['standing'] - real_terms['standing']).abs().mean()),
+            head_penalty_mean_absolute_error=float((predicted_terms['head_contact'] - real_terms['head_contact']).abs().mean()))
     assert_unchanged(trainer.world_model, before)
-    return dict(finite=True, world_model_unchanged=True, collected_transitions=96 * env.num_envs,
+    assert_unchanged(trainer.proprioception, proprio_before)
+    return dict(proprioception_unchanged=True, finite=True, world_model_unchanged=True, collected_transitions=96 * env.num_envs,
                 sampled_windows=batch_size, collection=collection, endpoint_errors=result,
                 note='Fresh stochastic rollouts from the same reset distribution; overlapping windows are possible. No prediction-quality threshold is imposed.')

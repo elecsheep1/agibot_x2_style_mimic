@@ -28,9 +28,12 @@ class GetupTaskCfg:
     # 工程初值，单位米；后续根据仿真核对。
     contact_distance: float = 0.005
     contact_transition: float = 0.005
+    # 头部接近地面的几何惩罚，不表示接触力。
     head_contact_weight: float = 2.0
-    head_contact_distance: float = 0.0
-    head_contact_transition: float = 0.005
+    # 离地达到此距离时，惩罚为零，单位米。
+    head_contact_distance: float = 0.005
+    # 从零惩罚到满惩罚的距离跨度，单位米。
+    head_contact_transition: float = 0.010
 
 
 class GetupTask(nn.Module):
@@ -176,7 +179,7 @@ class GetupTask(nn.Module):
         )
 
     def head_contact_cost(self, state):
-        """有限范围的头部接地代理，远离地面时严格为零。"""
+        """头部接近地面的有界距离惩罚，不表示接触力。"""
         clearance = self.contact_geometry(state)[:, 4:6]
 
         level = (
@@ -192,7 +195,8 @@ class GetupTask(nn.Module):
             * (3.0 - 2.0 * level)
         )
 
-        return proximity.sum(dim=-1)
+        # 取最接近地面的头部部位，不重复计罚。
+        return proximity.amax(dim=-1)
 
     @property
     def max_step_reward(self):

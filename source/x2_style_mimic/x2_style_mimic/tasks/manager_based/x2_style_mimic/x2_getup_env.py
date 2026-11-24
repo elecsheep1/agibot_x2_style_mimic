@@ -13,6 +13,9 @@ from .mdp.amp import (
 )
 from .mdp.getup_assist import GetUpAssist
 from .x2_style_mimic_env_cfg import POLICY_JOINT_NAMES
+from .mdp.self_contact import (
+    reset_ground_contact_sensors,
+)
 
 class X2AMPGetUpEnv(ManagerBasedRLEnv):
     """保留普通环境返回值，额外返回 AMP 的真实步后状态。"""
@@ -87,6 +90,12 @@ class X2AMPGetUpEnv(ManagerBasedRLEnv):
 
         # 捕获完成后，执行原有重置流程。
         super()._reset_idx(env_ids)
+        # 旧回合终止状态已捕获。
+        # 新回合不继承旧的过滤地面接触历史。
+        reset_ground_contact_sensors(
+            self,
+            env_ids,
+        )
 
 class X2MultiMotionGetUpEnv(X2AMPGetUpEnv):
     def step(self, action):

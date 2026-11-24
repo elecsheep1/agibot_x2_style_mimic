@@ -1,0 +1,21 @@
+# 从头进行短程学习诊断；完整继承当前 source 网络与任务配置。
+run_name = "getup_official_alignment_short50"
+world_model_scratch = true
+offline_world_fraction = 0.0
+num_envs = 32
+iterations = 50
+collection_steps = 32
+world_batch_size = 128
+policy_batch_size = 128
+amp_batch_size = 128
+world_horizons = [8]
+imagination_horizon = 32
+world_updates = 5
+discriminator_updates = 4
+warmup_steps = 256
+warmup_updates = 200
+warmup_collect_interval = 25
+eval_interval = 25
+eval_seconds = 5.0
+checkpoint_interval = 25
+log_interval = 5

@@ -52,6 +52,66 @@ class TrainingEntryTests(unittest.TestCase):
         torch.testing.assert_close(totals.first_success, torch.tensor([5., 8.]))
         self.assertEqual(totals.success.tolist(), [True, True])
 
+    def test_reward_term_totals_mask_and_gap(self):
+        totals = evaluation.RewardTermTotals(2, 'cpu')
+        totals.update(torch.tensor([True, True]), {'standing': torch.tensor([1., 2.])},
+                      {'standing': torch.tensor([.5, 1.])})
+        totals.update(torch.tensor([False, True]), {'standing': torch.tensor([999., 3.])},
+                      {'standing': torch.tensor([999., 2.])})
+        metrics = totals.metrics(torch.tensor([True, True]))
+        self.assertEqual(metrics['real_terms/standing'], 3.)
+        self.assertEqual(metrics['proxy_terms/standing'], 1.75)
+        self.assertEqual(metrics['term_gaps/standing'], 1.25)
+
+    def test_actual_reward_terms_apply_dt_once_and_check_sum(self):
+        env = SimpleNamespace(num_envs=2, step_dt=.02,
+            reward_manager=SimpleNamespace(active_terms=['standing', 'head_contact'],
+                _step_reward=torch.tensor([[10., -2.], [5., 0.]])))
+        values = evaluation.actual_reward_terms(env, torch.tensor([.16, .1]))
+        torch.testing.assert_close(values['standing'], torch.tensor([.2, .1]))
+        with self.assertRaises(AssertionError):
+            evaluation.actual_reward_terms(env, torch.zeros(2))
+
+    def test_head_diagnostic_distinguishes_history_only_and_reset(self):
+        module = load('head_diagnostics')
+        row = dict(valid=[True, True, False], current_contact=[True, False, True],
+                   historical_contact=[True, True, True], proxy_cost=[0., 0., 0.])
+        counts = module.summarize_head_trace([row])
+        self.assertEqual(counts['valid_samples'], 2)
+        self.assertEqual(counts['historical_only_samples'], 1)
+        self.assertEqual(counts['zero_proxy_on_current_contact'], 1)
+        self.assertEqual(counts['zero_proxy_on_historical_contact'], 2)
+
+    def test_head_snapshot_reads_current_and_historical_force_separately(self):
+        module = load('head_diagnostics')
+        current = torch.zeros(2, 1, 1, 3)
+        current[0, 0, 0, 2] = 20.
+        history = torch.zeros(2, 3, 1, 1, 3)
+        history[:, 0, 0, 0, 2] = 30.
+        data = SimpleNamespace(force_matrix_w=current, force_matrix_w_history=history)
+        env = SimpleNamespace(num_envs=2, scene=SimpleNamespace(sensors={
+            name: SimpleNamespace(data=data) for name in module.SENSORS}),
+            reward_manager=SimpleNamespace(get_term_cfg=lambda _: SimpleNamespace(params={'force_threshold': 10.})))
+        task = SimpleNamespace(contact_geometry=lambda x: torch.ones(2, 6),
+                               head_contact_cost=lambda x: torch.zeros(2))
+        sample = module.head_snapshot(env, task, torch.zeros(2, 3), torch.tensor([True, False]))
+        self.assertEqual(sample['current_contact'], [True, False])
+        self.assertEqual(sample['historical_contact'], [True, True])
+        self.assertEqual(sample['valid'], [True, False])
+        self.assertEqual(sample['clearance_m'], [[1., 1.], [1., 1.]])
+
+    def test_filtered_contact_history_explicit_reset_is_selective(self):
+        module = load('head_diagnostics')
+        values = torch.ones(2, 3, 1, 1, 3)
+        calls = []
+        sensor = SimpleNamespace(reset=lambda ids: calls.append(ids.clone()),
+                                 data=SimpleNamespace(force_matrix_w_history=SimpleNamespace(torch=values)))
+        env = SimpleNamespace(scene=SimpleNamespace(sensors={'head': sensor}))
+        module.reset_evaluation_sensors(env, torch.tensor([1]))
+        torch.testing.assert_close(values[0], torch.ones_like(values[0]))
+        torch.testing.assert_close(values[1], torch.zeros_like(values[1]))
+        self.assertEqual(len(calls), 2)
+
     def make_warmup_runtime(self, completed=False):
         class ToyWorld(torch.nn.Linear):
             def __init__(self):
