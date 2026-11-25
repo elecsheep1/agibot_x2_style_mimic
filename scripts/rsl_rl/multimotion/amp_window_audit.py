@@ -109,6 +109,7 @@ class AMPWindowAudit:
             return {"count": int(mask.sum()), "score_mean": float(score.mean()),
                 "score_p10_p50_p90": score.quantile(torch.tensor([.1,.5,.9])).tolist(),
                 "style_mean": float(reward.mean()), "zero_style_fraction": float((reward == 0).float().mean()),
+                "negative_style_fraction": float((reward < 0).float().mean()),
                 "score_below_minus_one_fraction": float((score <= -1.0).float().mean()),
                 "nearest_reference_normalized_rms": float(data_distance[mask].mean()),
                 "block_normalized_rms": {k: float(v[mask].mean()) for k,v in errors.items()}}

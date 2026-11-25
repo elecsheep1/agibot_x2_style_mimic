@@ -34,7 +34,7 @@ class GetupTaskCfg:
     head_contact_distance: float = 0.005
     # 从零惩罚到满惩罚的距离跨度，单位米。
     head_contact_transition: float = 0.010
-    # 势函数进展奖励；与真实环境的 getup_progress_reward 对应。
+    # 势函数进展奖励
     progress_weight: float = 5.0
     # 势函数折扣；1.0 时整段求和等于终态势减初态势，无法靠悬停刷取。
     progress_gamma: float = 1.0
@@ -363,7 +363,8 @@ class GetupTask(nn.Module):
         potential_before = self.geometry_potential(before)
 
         # RewardManager 和这里的公共乘 dt 会抵消，使 progress_weight
-        # 直接表示势函数差分系数，与真实环境 GetUpPotentialReward 一致。
+        # 直接表示势函数差分系数。注意符号约定：真实环境用 γΦ' − Φ，
+        # 这里是 Φ' − γΦ；当前 progress_gamma=1.0 时两者一致。
         progress = (
             potential_after - cfg.progress_gamma * potential_before
         ) / cfg.step_dt

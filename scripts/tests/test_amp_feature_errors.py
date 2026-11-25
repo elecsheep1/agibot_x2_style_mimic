@@ -2,6 +2,7 @@
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 import torch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
@@ -58,6 +59,16 @@ class FeatureErrorTests(unittest.TestCase):
         self.assertAlmostEqual(result['score_below_minus_one_fraction'], 2/3, places=6)
         with self.assertRaises(ValueError):
             score_stats(scores, mask, mapping='invalid')
+
+    def test_signed_rewards_are_distinct_from_zero_rewards(self):
+        scores = torch.tensor([-1.2, -1.0, -0.95, 1.0])
+        mask = torch.tensor([True, True, True, False])
+        rewards = torch.tensor([-0.05, 0.0, 0.014])
+        with patch('checks.analyze_amp_feature_errors.style_reward_from_score', return_value=rewards):
+            result = score_stats(scores, mask, mapping='softplus_centered')
+        self.assertAlmostEqual(result['zero_reward_fraction'], 1/3, places=6)
+        self.assertAlmostEqual(result['negative_reward_fraction'], 1/3, places=6)
+        self.assertAlmostEqual(result['reward_mean'], rewards.mean().item())
 
     def test_sensitivity_reproduces_old_and_clipped_checkpoint_scores(self):
         # Force an extreme feature so missing clipping cannot silently pass.

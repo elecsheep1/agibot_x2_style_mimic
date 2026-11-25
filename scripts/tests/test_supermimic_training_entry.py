@@ -72,12 +72,12 @@ class TrainingEntryTests(unittest.TestCase):
     def test_reward_term_totals_mask_and_gap(self):
         totals = evaluation.RewardTermTotals(2, 'cpu')
         totals.update(torch.tensor([True, True]), {'standing': torch.tensor([1., 2.])},
-                      {'standing': torch.tensor([.5, 1.])})
+                      {'progress': torch.tensor([.5, 1.])})
         totals.update(torch.tensor([False, True]), {'standing': torch.tensor([999., 3.])},
-                      {'standing': torch.tensor([999., 2.])})
+                      {'progress': torch.tensor([999., 2.])})
         metrics = totals.metrics(torch.tensor([True, True]))
         self.assertEqual(metrics['real_terms/standing'], 3.)
-        self.assertEqual(metrics['proxy_terms/standing'], 1.75)
+        self.assertEqual(metrics['proxy_terms/progress'], 1.75)
         self.assertEqual(metrics['term_gaps/standing'], 1.25)
 
     def test_actual_reward_terms_apply_dt_once_and_check_sum(self):

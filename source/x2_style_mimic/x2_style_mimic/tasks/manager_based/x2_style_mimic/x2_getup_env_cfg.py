@@ -132,6 +132,10 @@ class GetUpObservationsCfg(ObservationsCfg):
             },
         )
 
+        getup_phase = ObsTerm(
+            func=getup_mdp.getup_phase_observation,
+        )
+
         def __post_init__(self):
             super().__post_init__()
             self.history_length = 5
@@ -255,8 +259,8 @@ class GetUpEventsCfg:
 @configclass
 class GetUpRewardsCfg:
     standing = RewTerm(
-        func=getup_mdp.standing_quality_reward,
-        weight=5.0,
+        func=getup_mdp.StandingQualityPotential,
+        weight=3.0,
         params={
             "torso_cfg": SceneEntityCfg(
                 "robot",
@@ -307,27 +311,46 @@ class GetUpRewardsCfg:
             "stance_width": 0.34,
             "toe_out_rad": 0.08726646,
             "limb_fraction": 0.20,
+            "gamma": 0.99,
         },
     )
 
-    getup_progress_reward = RewTerm(
-        func=getup_mdp.GetUpPotentialReward,
-        weight=5.0,
+    getup_tracking = RewTerm(
+        func=getup_mdp.getup_tracking_reward,
+        weight=8.0,
         params={
+            "head_cfg": SceneEntityCfg(
+                "robot",
+                body_names=["head_pitch_link"],
+                preserve_order=True,
+            ),
             "torso_cfg": SceneEntityCfg(
                 "robot",
                 body_names=["torso_link"],
                 preserve_order=True,
             ),
-            "gamma": 1.0,
-        },
-    )
-
-    standing_once = RewTerm(
-        func=getup_mdp.StandOnceReward,
-        weight=3.0,
-        params={
-            "hold_seconds": 2.0,
+            "knee_cfg": SceneEntityCfg(
+                "robot",
+                joint_names=[
+                    "left_knee_joint",
+                    "right_knee_joint",
+                ],
+                preserve_order=True,
+            ),
+            "ground_sensor_cfgs": (
+                SceneEntityCfg("left_foot_ground_contact"),
+                SceneEntityCfg("right_foot_ground_contact"),
+            ),
+            "target_head_height": 1.08,
+            "height_sigma": 0.25,
+            "root_tilt_sigma": 0.40,
+            "torso_tilt_sigma": 0.50,
+            "target_root_height": 0.64,
+            "root_height_sigma": 0.12,
+            "knee_sigma": 0.50,
+            "support_floor": 0.25,
+            "stability_linear_sigma": 0.25,
+            "stability_angular_sigma": 0.60,
         },
     )
 
@@ -345,7 +368,7 @@ class GetUpRewardsCfg:
 
     action_rate = RewTerm(
         func=mdp.action_rate_l2,
-        weight=-0.020,
+        weight=-0.010,
     )
 
     action_second_difference = RewTerm(
@@ -430,6 +453,17 @@ class GetUpTerminationsCfg:
                 SceneEntityCfg("left_foot_ground_contact"),
                 SceneEntityCfg("right_foot_ground_contact"),
             ),
+        },
+    )
+
+    # 一段时间内高度没有明显进展的早停
+    no_height_progress = DoneTerm(
+        func=getup_mdp.NoHeightProgress,
+        time_out=False,
+        params={
+            "min_progress": 0.02,
+            "grace_time": 8.0,
+            "patience": 6.0,
         },
     )
 

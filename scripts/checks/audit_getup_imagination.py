@@ -81,10 +81,6 @@ def main():
     sys.argv = [sys.argv[0]]
     from x2_style_mimic.tasks.manager_based.x2_style_mimic.x2_supermimic_getup_env_cfg import X2SuperMimicGetupEnvCfg
     env_cfg = X2SuperMimicGetupEnvCfg()
-    # 只读诊断不使用真实 RewardManager；势函数项依赖 step 前捕获，
-    # 这里禁用它，避免诊断依赖无关的真实奖励实现。
-    if hasattr(env_cfg.rewards, 'getup_progress_reward'):
-        env_cfg.rewards.getup_progress_reward = None
     env_cfg.scene.num_envs, env_cfg.seed, env_cfg.sim.device = cfg.num_envs, cfg.seed, cfg.device
     with launch_simulation(env_cfg, launcher):
         from x2_style_mimic.tasks.manager_based.x2_style_mimic.x2_supermimic_env import X2SuperMimicEnv

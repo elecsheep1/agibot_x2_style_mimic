@@ -87,6 +87,7 @@ def score_stats(scores, mask, mapping='lsgan'):
     r=style_reward_from_score(s, mapping=mapping)
     return dict(count=len(s),score_mean=float(s.mean()),p10_p50_p90=s.quantile(torch.tensor([.1,.5,.9])).tolist(),
                 reward_mean=float(r.mean()),zero_reward_fraction=float((r==0).float().mean()),
+                negative_reward_fraction=float((r<0).float().mean()),
                 score_below_minus_one_fraction=float((s <= -1.0).float().mean()))
 
 
@@ -209,12 +210,12 @@ def analyze(path, output, device='cpu'):
            '仅描述当前策略与参考的差异；高误差不等于特征不重要。混合替换输入可能不满足物理一致性。',
            f"标准化：{normalization['mode']}；D 输入裁剪：{normalization['clip']}。匹配和误差统计均使用未裁剪距离。",'',
            f"风格奖励映射为 {reward_mapping}。score≤−1 的比例单独保留，用于观察旧映射低分零奖励区域。",'',
-           '|阶段|窗口数|P10 / P50 / P90|原始风格奖励|零奖励比例|score≤−1 比例|归一化 RMS|',
-           '|---|---:|---|---:|---:|---:|---:|']
+           '|阶段|窗口数|P10 / P50 / P90|原始风格奖励|零奖励比例|负奖励比例|score≤−1 比例|归一化 RMS|',
+           '|---|---:|---|---:|---:|---:|---:|---:|']
     for name,item in report['phases'].items():
         s=item['scores'];err=item['errors']
         if not s['count']:continue
-        lines.append(f"|{name}|{s['count']}|{' / '.join(f'{v:.4f}' for v in s['p10_p50_p90'])}|{s['reward_mean']:.4f}|{100*s['zero_reward_fraction']:.2f}%|{100*s['score_below_minus_one_fraction']:.2f}%|{err['normalized_rms']:.4f}|")
+        lines.append(f"|{name}|{s['count']}|{' / '.join(f'{v:.4f}' for v in s['p10_p50_p90'])}|{s['reward_mean']:.4f}|{100*s['zero_reward_fraction']:.2f}%|{100*s['negative_reward_fraction']:.2f}%|{100*s['score_below_minus_one_fraction']:.2f}%|{err['normalized_rms']:.4f}|")
     early=report['phases']['pre_fade_hold_le_010']['errors']
     for category in ['blocks','bodies','joints','body_components']:
         lines+=['',f'## 未淡出阶段：{category}','','|特征|维数|归一化 RMS|平方误差占比|','|---|---:|---:|---:|']

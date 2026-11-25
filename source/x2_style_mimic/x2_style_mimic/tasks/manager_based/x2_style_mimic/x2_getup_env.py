@@ -23,12 +23,17 @@ class X2AMPGetUpEnv(ManagerBasedRLEnv):
     def step(self, action):
         # 势函数奖励需要本步动作执行前的状态。
         # 放在共同父类里，X2MultiMotionGetUpEnv 和 X2SuperMimicEnv 都会经过。
-        if "getup_progress_reward" in self.reward_manager.active_terms:
-            progress_cfg = self.reward_manager.get_term_cfg(
-                "getup_progress_reward"
+        for term_name in self.reward_manager.active_terms:
+            term_cfg = self.reward_manager.get_term_cfg(term_name)
+
+            capture = getattr(
+                term_cfg.func,
+                "capture_before_step",
+                None,
             )
-            if progress_cfg.weight != 0.0:
-                progress_cfg.func.capture_before_step(self)
+
+            if term_cfg.weight != 0.0 and capture is not None:
+                capture(self)
         if not hasattr(self, "_amp_asset_cfg"):
             self._amp_asset_cfg = SceneEntityCfg(
                 "robot",
