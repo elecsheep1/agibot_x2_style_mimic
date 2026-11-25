@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import torch
 from x2_style_mimic.algorithms.amp.history import AMPHistory
+from x2_style_mimic.algorithms.amp.style_rewards import style_reward_from_score
 from x2_style_mimic.tasks.manager_based.x2_style_mimic.mdp.amp import AMP_FEATURE_VERSION, AMP_KEY_BODY_NAMES
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -56,7 +57,10 @@ class AMPWindowAudit:
         span = (self.alg.amp_num_steps - 1) * self.env.step_dt
         standing = data["hold_s"] > span + 1e-6
         data["standing"] = standing
-        data["style_reward"] = (1 - .25 * (data["score"] - 1).square()).clamp(0, 1)
+        data["style_reward_mapping"] = self.alg.amp_cfg.get("style_reward_mapping", "lsgan")
+        data["style_reward"] = style_reward_from_score(
+            data["score"], mapping=data["style_reward_mapping"]
+        )
         data["checkpoint"] = self.checkpoint
         data["feature_version"] = AMP_FEATURE_VERSION + "_window_v1"
         data["state_dim"] = self.state_dim
@@ -105,9 +109,11 @@ class AMPWindowAudit:
             return {"count": int(mask.sum()), "score_mean": float(score.mean()),
                 "score_p10_p50_p90": score.quantile(torch.tensor([.1,.5,.9])).tolist(),
                 "style_mean": float(reward.mean()), "zero_style_fraction": float((reward == 0).float().mean()),
+                "score_below_minus_one_fraction": float((score <= -1.0).float().mean()),
                 "nearest_reference_normalized_rms": float(data_distance[mask].mean()),
                 "block_normalized_rms": {k: float(v[mask].mean()) for k,v in errors.items()}}
         report = {"checkpoint": self.checkpoint, "capture": str(self.output),
+            "style_reward_mapping": data["style_reward_mapping"],
             "phase_definition": "standing: current uninterrupted success-predicate hold exceeds full window span; other windows: getup_or_transition (including boundary/recovery)",
             "normalization": data["normalization"],
             "comparison": "Nearest full five-state reference window, all clips/all phases; matching and block errors use unclipped checkpoint-standardized differences (std floor 0.05). D scores separately use checkpoint input clipping. Descriptive mismatch, not causal attribution.",

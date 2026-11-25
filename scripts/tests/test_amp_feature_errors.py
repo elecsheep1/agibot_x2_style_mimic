@@ -46,6 +46,19 @@ class FeatureErrorTests(unittest.TestCase):
         self.assertAlmostEqual(result['reward_mean'],.25)
         self.assertEqual(score_stats(torch.ones(1),torch.tensor([False])),{'count':0})
 
+    def test_softplus_reward_retains_low_score_diagnostic(self):
+        scores = torch.tensor([-1.2, -1.0, -0.95, 1.0])
+        mask = torch.tensor([True, True, True, False])
+        result = score_stats(scores, mask, mapping='softplus')
+        self.assertAlmostEqual(
+            result['reward_mean'],
+            torch.nn.functional.softplus(scores[mask]).mean().item(),
+        )
+        self.assertEqual(result['zero_reward_fraction'], 0.0)
+        self.assertAlmostEqual(result['score_below_minus_one_fraction'], 2/3, places=6)
+        with self.assertRaises(ValueError):
+            score_stats(scores, mask, mapping='invalid')
+
     def test_sensitivity_reproduces_old_and_clipped_checkpoint_scores(self):
         # Force an extreme feature so missing clipping cannot silently pass.
         for dim, running, widths in ((233,False,(256,128)), (233,True,(256,128)),
@@ -85,8 +98,8 @@ class FeatureErrorTests(unittest.TestCase):
     def test_complete_analysis_accepts_current_and_archived_layouts(self):
         bodies=['torso_link','left_shoulder','right_shoulder','left_wrist','right_wrist',
                 'left_hip','right_hip','left_knee','right_knee','left_ankle','right_ankle']
-        for dim in (175,233):
-            with self.subTest(dim=dim), tempfile.TemporaryDirectory() as directory:
+        for dim, mapping in ((175, 'lsgan'), (233, 'lsgan'), (175, 'softplus')):
+            with self.subTest(dim=dim, mapping=mapping), tempfile.TemporaryDirectory() as directory:
                 directory=Path(directory)
                 net=torch.nn.Sequential(torch.nn.Linear(5*dim,8),torch.nn.ELU(),
                     torch.nn.Linear(8,4),torch.nn.ELU(),torch.nn.Linear(4,1))
@@ -95,7 +108,8 @@ class FeatureErrorTests(unittest.TestCase):
                 state={'network.'+k:v for k,v in net.state_dict().items()}
                 state.update(state_mean=torch.zeros(dim),state_std=torch.ones(dim))
                 checkpoint=directory/'model.pt'
-                torch.save({'amp_window':dict(discriminator=state,settings={})},checkpoint)
+                settings = {} if mapping == 'lsgan' else {'style_reward_mapping': mapping}
+                torch.save({'amp_window':dict(discriminator=state,settings=settings)},checkpoint)
                 windows=torch.zeros(1,5,dim)
                 capture=directory/'windows.pt'
                 torch.save(dict(windows=windows,reference_windows=windows.clone(),
@@ -105,10 +119,18 @@ class FeatureErrorTests(unittest.TestCase):
                     motion_id=torch.zeros(1,dtype=torch.long),reference_window_counts=[1],
                     reference_files=['reference.npz']),capture)
                 report=analyze(capture,directory/'report')
+                self.assertEqual(report['style_reward_mapping'], mapping)
+                expected_reward = .75 if mapping == 'lsgan' else torch.nn.functional.softplus(torch.tensor(0.)).item()
+                self.assertAlmostEqual(report['phases']['all']['scores']['reward_mean'], expected_reward)
                 self.assertEqual(report['dimensions'],dim)
                 self.assertEqual(report['phases']['all']['errors']['normalized_rms'],0.)
                 joint_rows=report['phases']['all']['errors']['joints']
                 self.assertEqual(len(joint_rows),0 if dim==175 else 29)
                 self.assertTrue((directory/'report'/'report.md').exists())
+                captured = torch.load(capture, weights_only=False)
+                captured['style_reward_mapping'] = 'softplus' if mapping == 'lsgan' else 'lsgan'
+                torch.save(captured, capture)
+                with self.assertRaisesRegex(ValueError, 'reward mapping differs'):
+                    analyze(capture, directory/'mismatched_report')
 
 if __name__=='__main__':unittest.main()

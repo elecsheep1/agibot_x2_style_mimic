@@ -6,6 +6,7 @@ import sys
 
 import torch
 from torch import nn
+from x2_style_mimic.algorithms.amp.style_rewards import style_reward_from_score
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from common.amp_feature_layout import feature_blocks
@@ -80,12 +81,13 @@ def mismatch(windows, refs, matches, std, mask, group_sets):
                 **{k:error_rows(sse,raw_sse,g,count,total) for k,g in group_sets.items()})
 
 
-def score_stats(scores, mask):
+def score_stats(scores, mask, mapping='lsgan'):
     s=scores[mask]
     if not len(s):return dict(count=0)
-    r=(1-.25*(s-1).square()).clamp(0,1)
+    r=style_reward_from_score(s, mapping=mapping)
     return dict(count=len(s),score_mean=float(s.mean()),p10_p50_p90=s.quantile(torch.tensor([.1,.5,.9])).tolist(),
-                reward_mean=float(r.mean()),zero_reward_fraction=float((r==0).float().mean()))
+                reward_mean=float(r.mean()),zero_reward_fraction=float((r==0).float().mean()),
+                score_below_minus_one_fraction=float((s <= -1.0).float().mean()))
 
 
 
@@ -164,6 +166,9 @@ def analyze(path, output, device='cpu'):
     gs=groups(d['joint_names'],d['body_names'],state_dim)
     checkpoint=torch.load(d['checkpoint'],map_location='cpu',weights_only=False)['amp_window']
     normalization=checkpoint_normalization(checkpoint)
+    reward_mapping = checkpoint['settings'].get('style_reward_mapping', 'lsgan')
+    if d.get('style_reward_mapping', reward_mapping) != reward_mapping:
+        raise ValueError('Capture reward mapping differs from checkpoint')
     # Descriptive distances stay unclipped, even when D inputs are clipped.
     # Recompute so older captures with clipped nearest-neighbor matching are safe.
     match=nearest_match(w,refs,std,device)
@@ -179,17 +184,18 @@ def analyze(path, output, device='cpu'):
                          errors='Aggregate normalized RMS and squared-error share, not discriminator importance.',
                          sensitivity=f'Replace selected features across all {num_steps} states with nearest-reference values. Hybrid inputs can be physically inconsistent/out of distribution; descriptive sensitivity, not causal proof or a reduced-feature retraining result.'),
         dimensions=state_dim,num_steps=num_steps,feature_version=d.get('feature_version'),
+        style_reward_mapping=reward_mapping,
         reference_files=d['reference_files'],reference_window_counts=d['reference_window_counts'],
         phases={})
     for name,mask in phases.items():
-        report['phases'][name]=dict(scores=score_stats(d['score'],mask),errors=mismatch(w,refs,match,std,mask,gs))
+        report['phases'][name]=dict(scores=score_stats(d['score'],mask,mapping=reward_mapping),errors=mismatch(w,refs,match,std,mask,gs))
     report['by_motion']={}
     offset=0
     for motion,n in enumerate(d['reference_window_counts']):
         mask=(d['motion_id']==motion)&phases['pre_fade_hold_le_010']
         local_ids=mask.nonzero().flatten();local=match.clone()
         if len(local_ids):local[local_ids]=nearest_match(w[local_ids],refs[offset:offset+n],std,device)+offset
-        report['by_motion'][str(motion)]=dict(file=d['reference_files'][motion],scores=score_stats(d['score'],mask),
+        report['by_motion'][str(motion)]=dict(file=d['reference_files'][motion],scores=score_stats(d['score'],mask,mapping=reward_mapping),
             global_match=mismatch(w,refs,match,std,mask,gs),same_motion_match=mismatch(w,refs,local,std,mask,gs))
         offset+=n
     # Score sensitivity is intentionally limited to the phase targeted by this experiment.
@@ -202,12 +208,13 @@ def analyze(path, output, device='cpu'):
     lines=[f'# AMP{state_dim} 特征误差分析','',f"检查点：`{d['checkpoint']}`",'',
            '仅描述当前策略与参考的差异；高误差不等于特征不重要。混合替换输入可能不满足物理一致性。',
            f"标准化：{normalization['mode']}；D 输入裁剪：{normalization['clip']}。匹配和误差统计均使用未裁剪距离。",'',
-           '|阶段|窗口数|P10 / P50 / P90|原始风格奖励|零奖励比例|归一化 RMS|',
-           '|---|---:|---|---:|---:|---:|']
+           f"风格奖励映射为 {reward_mapping}。score≤−1 的比例单独保留，用于观察旧映射低分零奖励区域。",'',
+           '|阶段|窗口数|P10 / P50 / P90|原始风格奖励|零奖励比例|score≤−1 比例|归一化 RMS|',
+           '|---|---:|---|---:|---:|---:|---:|']
     for name,item in report['phases'].items():
         s=item['scores'];err=item['errors']
         if not s['count']:continue
-        lines.append(f"|{name}|{s['count']}|{' / '.join(f'{v:.4f}' for v in s['p10_p50_p90'])}|{s['reward_mean']:.4f}|{100*s['zero_reward_fraction']:.2f}%|{err['normalized_rms']:.4f}|")
+        lines.append(f"|{name}|{s['count']}|{' / '.join(f'{v:.4f}' for v in s['p10_p50_p90'])}|{s['reward_mean']:.4f}|{100*s['zero_reward_fraction']:.2f}%|{100*s['score_below_minus_one_fraction']:.2f}%|{err['normalized_rms']:.4f}|")
     early=report['phases']['pre_fade_hold_le_010']['errors']
     for category in ['blocks','bodies','joints','body_components']:
         lines+=['',f'## 未淡出阶段：{category}','','|特征|维数|归一化 RMS|平方误差占比|','|---|---:|---:|---:|']
