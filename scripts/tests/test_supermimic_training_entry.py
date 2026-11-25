@@ -1,5 +1,7 @@
 """脚本层固定状态、几何判定与checkpoint恢复的回归检查。"""
+import contextlib
 import importlib.util
+import io
 from pathlib import Path
 import random
 import sys
@@ -27,9 +29,24 @@ def load(name):
 evaluation = load('getup_evaluation')
 checkpointing = load('getup_checkpointing')
 warmup = load('getup_warmup')
+logging_module = load('getup_logging')
 
 
 class TrainingEntryTests(unittest.TestCase):
+    def test_console_table_prints_header_once_and_aligns_rows(self):
+        table = logging_module.ConsoleTable('train', ('iter', 'loss'), (4, 8))
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            table.row((1, '0.5'))
+            table.row((22, '0.25'))
+        lines = output.getvalue().splitlines()
+        self.assertEqual(len(lines), 3)
+        self.assertTrue(lines[0].startswith('train'))
+        self.assertEqual(output.getvalue().count('iter'), 1)
+        self.assertEqual(len(lines[1]), len(lines[2]))
+        with self.assertRaises(ValueError):
+            table.row((1,))
+
     def test_real_reward_and_full_task_snapshot_freeze_after_first_episode(self):
         totals = evaluation.TaskEvaluationTotals(2, 'cpu')
         progress = dict(succeeded=torch.tensor([True, False]),

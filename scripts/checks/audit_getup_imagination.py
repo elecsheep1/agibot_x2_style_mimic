@@ -50,14 +50,14 @@ def action_summary(actions, lower, upper):
 def task_return(task, states, actions, goals):
     """沿固定动作序列累计任务奖励，风格奖励置零。
 
-    states 为 [B, H+1, Ds]，actions 为 [H, B, A]；返回 [B]。
+    states 为 [B, H+1, Ds]，actions 为 [B, H, A]，与 sample_windows 一致；返回 [B]。
     """
     import torch
     with torch.no_grad():
         total = states.new_zeros(states.shape[0])
         style = states.new_zeros(states.shape[0])
-        for step in range(actions.shape[0]):
-            reward, _ = task.reward(states[:, step], actions[step],
+        for step in range(actions.shape[1]):
+            reward, _ = task.reward(states[:, step], actions[:, step],
                                     states[:, step + 1], goals, style)
             total += reward
         return total
@@ -81,6 +81,10 @@ def main():
     sys.argv = [sys.argv[0]]
     from x2_style_mimic.tasks.manager_based.x2_style_mimic.x2_supermimic_getup_env_cfg import X2SuperMimicGetupEnvCfg
     env_cfg = X2SuperMimicGetupEnvCfg()
+    # 只读诊断不使用真实 RewardManager；势函数项依赖 step 前捕获，
+    # 这里禁用它，避免诊断依赖无关的真实奖励实现。
+    if hasattr(env_cfg.rewards, 'getup_progress_reward'):
+        env_cfg.rewards.getup_progress_reward = None
     env_cfg.scene.num_envs, env_cfg.seed, env_cfg.sim.device = cfg.num_envs, cfg.seed, cfg.device
     with launch_simulation(env_cfg, launcher):
         from x2_style_mimic.tasks.manager_based.x2_style_mimic.x2_supermimic_env import X2SuperMimicEnv
@@ -96,6 +100,7 @@ def main():
         env = X2SuperMimicEnv(env_cfg)
         try:
             runtime = build_runtime(env, cfg, checkpoint)
+            cfg.output.mkdir(parents=True, exist_ok=False)
             trainer = runtime.trainer
             spec = env.world_state_spec
             horizon = IMAGINATION + HISTORY_FRAMES - 1
@@ -135,6 +140,13 @@ def main():
                 height = lambda state: unpack_state(state, spec)['root_pose'][:, 2]
                 def standing(state):
                     return float(trainer.task.standing_quality(state).mean())
+                # 站立项只表示接近站立后的维持质量，低位恒为零；
+                # 高度进展要看势函数。旧 source 没有这个方法时保持兼容。
+                potential_before_fn = getattr(trainer.task, 'geometry_potential', None)
+                def potential(state):
+                    if potential_before_fn is None:
+                        return None
+                    return float(potential_before_fn(state).mean())
                 report = dict(
                     checkpoint=str(cfg.resume.resolve()), iteration=checkpoint['iteration'],
                     imagination_steps=IMAGINATION, history_frames=HISTORY_FRAMES,
@@ -153,6 +165,9 @@ def main():
                     standing=dict(initial=standing(history[:, -1]),
                                   imagined_final=standing(trajectory.states[-1]),
                                   real_final=standing(real_states[:, -1])),
+                    potential=dict(initial=potential(history[:, -1]),
+                                   imagined_final=potential(trajectory.states[-1]),
+                                   real_final=potential(real_states[:, -1])),
                     root_height=dict(initial=float(height(history[:, -1]).mean()),
                                      imagined_final=float(height(trajectory.states[-1]).mean()),
                                      real_final=float(height(real_states[:, -1]).mean())),
@@ -167,6 +182,7 @@ def main():
             print('[想象诊断] 回报=' + json.dumps(report['returns'], ensure_ascii=False), flush=True)
             print('[想象诊断] 终止=' + json.dumps(report['termination'], ensure_ascii=False), flush=True)
             print('[想象诊断] 姿态=' + json.dumps(report['standing'], ensure_ascii=False), flush=True)
+            print('[想象诊断] 势函数=' + json.dumps(report['potential'], ensure_ascii=False), flush=True)
             print(f'[完成] {cfg.output}', flush=True)
         finally:
             env.close()

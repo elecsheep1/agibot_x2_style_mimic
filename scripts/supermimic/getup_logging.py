@@ -5,6 +5,37 @@ import math
 import torch
 
 
+class ConsoleTable:
+    """固定列宽的终端表；表头只在第一次输出时打印。
+
+    每行都带表名前缀，训练行和评估行交错时也能直接分辨。
+    """
+
+    def __init__(self, title, columns, widths):
+        if len(columns) != len(widths):
+            raise ValueError('表格列名与列宽数量不一致')
+        self.title = title
+        self.columns = tuple(columns)
+        self.widths = tuple(widths)
+        self.name_width = max(len(title) + 2, 8)
+        self._started = False
+
+    def row(self, values):
+        if len(values) != len(self.columns):
+            raise ValueError('表格行列数量不一致')
+        if not self._started:
+            print(self._line(self.columns), flush=True)
+            self._started = True
+        print(self._line(values), flush=True)
+
+    def _line(self, cells):
+        body = '  '.join(
+            str(cell).rjust(width)
+            for cell, width in zip(cells, self.widths)
+        )
+        return f'{self.title:<{self.name_width}}{body}'
+
+
 class GetupLogger:
     def __init__(self, cfg, metadata, cohort):
         from torch.utils.tensorboard import SummaryWriter

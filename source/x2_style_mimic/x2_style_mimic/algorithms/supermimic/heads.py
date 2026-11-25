@@ -34,6 +34,10 @@ class GetupTaskCfg:
     head_contact_distance: float = 0.005
     # 从零惩罚到满惩罚的距离跨度，单位米。
     head_contact_transition: float = 0.010
+    # 势函数进展奖励；与真实环境的 getup_progress_reward 对应。
+    progress_weight: float = 5.0
+    # 势函数折扣；1.0 时整段求和等于终态势减初态势，无法靠悬停刷取。
+    progress_gamma: float = 1.0
 
 
 class GetupTask(nn.Module):
@@ -79,10 +83,13 @@ class GetupTask(nn.Module):
             cfg.joint_acc_weight,
             cfg.boundary_weight,
             cfg.head_contact_weight,
+            cfg.progress_weight,
         )
 
         if min(weights) < 0:
             raise ValueError("奖励和惩罚权重必须为非负数")
+        if not 0.0 <= cfg.progress_gamma <= 1.0:
+            raise ValueError("progress_gamma 必须在 [0, 1] 内")
         if cfg.contact_distance < 0:
             raise ValueError("接触距离阈值不能为负")
 
@@ -166,49 +173,43 @@ class GetupTask(nn.Module):
             + quaternion[..., 1].square()
         )
 
-    def contact_proximity(self, state):
+    def contact_proximity(self, state, clearance=None):
         """几何接近程度，不代表承重或接触力。"""
-        clearance = self.contact_geometry(state)
+        if clearance is None:
+            clearance = self.contact_geometry(state)
 
         return torch.sigmoid(
-            (
-                self.cfg.contact_distance
-                - clearance
-            )
+            (self.cfg.contact_distance - clearance)
             / self.cfg.contact_transition
         )
 
-    def head_contact_cost(self, state):
+    def head_contact_cost(self, state, clearance=None):
         """头部接近地面的有界距离惩罚，不表示接触力。"""
-        clearance = self.contact_geometry(state)[:, 4:6]
+        if clearance is None:
+            clearance = self.contact_geometry(state)
+        clearance = clearance[:, 4:6]
 
         level = (
-            (
-                self.cfg.head_contact_distance
-                - clearance
-            )
+            (self.cfg.head_contact_distance - clearance)
             / self.cfg.head_contact_transition
         ).clamp(0.0, 1.0)
 
-        proximity = (
-            level.square()
-            * (3.0 - 2.0 * level)
-        )
-
-        # 取最接近地面的头部部位，不重复计罚。
+        proximity = level.square() * (3.0 - 2.0 * level)
         return proximity.amax(dim=-1)
 
     @property
     def max_step_reward(self):
-        """包含 AMP 在内的单步总奖励理论上限。"""
-        # 当前 standing_quality 和 AMP 风格奖励都在 [0, 1]。
-        return self.cfg.step_dt * (
-            self.cfg.standing_weight
-            + self.cfg.style_weight
+        """单步总奖励理论上限；势函数项已抵消公共 dt。"""
+        return (
+            self.cfg.step_dt * (
+                self.cfg.standing_weight
+                + self.cfg.style_weight
+            )
+            + self.cfg.progress_weight
         )
 
-    def standing_quality(self, state):
-        """根据预测状态计算几何姿态与速度稳定性。"""
+    def upright_fields(self, state):
+        """一次 FK 返回状态字段、高度和根/躯干直立程度。"""
         fields = unpack_state(state, self.spec)
 
         body_pose, _ = self.kinematics(
@@ -219,87 +220,75 @@ class GetupTask(nn.Module):
         )
 
         height = fields["root_pose"][:, 2]
+        root_up = self.upright_component(fields["root_pose"][:, 3:7])
+        torso_up = self.upright_component(body_pose[:, self.torso_index, 3:7])
 
-        root_up = self.upright_component(
-            fields["root_pose"][:, 3:7]
-        )
-        torso_up = self.upright_component(
-            body_pose[:, self.torso_index, 3:7]
-        )
+        return fields, height, root_up, torso_up
 
-        # 沿用现有起身奖励中的高度进展范围。
+    @staticmethod
+    def posture_potential(height, root_up, torso_up):
+        """与真实环境 standing_geometry_potential 同一口径，范围 [0, 1]。"""
         height_progress = (
             (height - 0.08) / (0.63 - 0.08)
         ).clamp(0.0, 1.0)
 
-        root_quality = (
-            root_up.clamp(-1.0, 1.0) + 1.0
-        ) * 0.5
-        torso_quality = (
-            torso_up.clamp(-1.0, 1.0) + 1.0
-        ) * 0.5
-
         posture_quality = 0.5 * (
-            root_quality + torso_quality
+            (root_up.clamp(-1.0, 1.0) + 1.0) * 0.5
+            + (torso_up.clamp(-1.0, 1.0) + 1.0) * 0.5
         )
 
-        geometry_quality = (
-            height_progress
-            * (0.25 + 0.75 * posture_quality)
-        )
+        return height_progress * (0.25 + 0.75 * posture_quality)
 
-        # 接近站立后，逐渐要求姿态直立与速度稳定。
+    def geometry_potential(self, state):
+        """势函数只需要姿态，不计算接触几何。"""
+        _, height, root_up, torso_up = self.upright_fields(state)
+        return self.posture_potential(height, root_up, torso_up)
+
+    def standing_and_potential(self, state):
+        """一次 FK、一次接触几何，同时返回维持奖励、势函数和 clearance。
+
+        高度进展只由势函数项提供；站立项只负责接近站立后的维持，
+        与真实环境一致，避免重复奖励同一种进展。
+        """
+        fields, height, root_up, torso_up = self.upright_fields(state)
+
+        clearance = self.contact_geometry(state)
+        potential = self.posture_potential(height, root_up, torso_up)
+
         near_standing = (
             (height - 0.48) / (0.60 - 0.48)
         ).clamp(0.0, 1.0)
         near_standing = (
-            near_standing.square()
-            * (3.0 - 2.0 * near_standing)
+            near_standing.square() * (3.0 - 2.0 * near_standing)
         )
 
         upright_gate = (
             (torch.minimum(root_up, torso_up) - 0.50)
-            / (
-                math.cos(math.radians(10.0)) - 0.50
-            )
+            / (math.cos(math.radians(10.0)) - 0.50)
         ).clamp(0.0, 1.0)
 
-        linear_velocity = (
-            fields["root_velocity"][:, :3]
-        )
-        angular_velocity = (
-            fields["root_velocity"][:, 3:6]
-        )
+        linear_velocity = fields["root_velocity"][:, :3]
+        angular_velocity = fields["root_velocity"][:, 3:6]
 
         stability_quality = torch.exp(
-            -linear_velocity.square().sum(dim=-1)
-            / 0.25**2
-            -angular_velocity.square().sum(dim=-1)
-            / 0.60**2
+            -linear_velocity.square().sum(dim=-1) / 0.25**2
+            - angular_velocity.square().sum(dim=-1) / 0.60**2
         )
 
-        proximity = self.contact_proximity(state)
+        proximity = self.contact_proximity(state, clearance)
 
         feet_support = proximity[:, :2].prod(dim=-1)
-
-        hands_clear = (
-            1.0 - proximity[:, 2:4]
-        ).prod(dim=-1)
-
+        hands_clear = (1.0 - proximity[:, 2:4]).prod(dim=-1)
         support_quality = feet_support * hands_clear
 
-        standing_score = (
-            0.65 * stability_quality
-            + 0.35 * support_quality
-        )
+        standing_score = stability_quality * support_quality
 
-        return (
-            0.35 * geometry_quality
-            + 0.65
-            * near_standing
-            * upright_gate
-            * standing_score
-        )
+        quality = near_standing * upright_gate * standing_score
+        return quality, potential, clearance
+
+    def standing_quality(self, state):
+        """对外保持原接口；只表示接近站立后的维持质量。"""
+        return self.standing_and_potential(state)[0]
 
     def reward(
         self,
@@ -370,12 +359,20 @@ class GetupTask(nn.Module):
             joint_acceleration.square().sum(dim=-1)
         )
 
-        head_contact = self.head_contact_cost(following)
+        standing, potential_after, clearance = self.standing_and_potential(following)
+        potential_before = self.geometry_potential(before)
+
+        # RewardManager 和这里的公共乘 dt 会抵消，使 progress_weight
+        # 直接表示势函数差分系数，与真实环境 GetUpPotentialReward 一致。
+        progress = (
+            potential_after - cfg.progress_gamma * potential_before
+        ) / cfg.step_dt
+
+        head_contact = self.head_contact_cost(following, clearance)
 
         terms = {
             "standing": (
-                cfg.standing_weight
-                * self.standing_quality(following)
+                cfg.standing_weight * standing
             ),
             "style": (
                 cfg.style_weight * style_reward
@@ -401,6 +398,9 @@ class GetupTask(nn.Module):
             "head_contact": (
                 -cfg.head_contact_weight
                 * head_contact
+            ),
+            "progress": (
+                cfg.progress_weight * progress
             ),
         }
 

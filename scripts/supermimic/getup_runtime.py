@@ -1,10 +1,12 @@
 """仅在脚本层组装已有的起身环境和训练组件。"""
+import contextlib
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 import torch
 
+from getup_config import PROJECT
 from getup_data import OfflineWorldReplay, read_world_checkpoint, shared_vector, action_bounds_from_calibration
 from contact_assets import build_contact_geometry, contact_geometry_contract, validate_geometry_checkpoint
 from getup_checkpointing import collect_optimizers
@@ -224,3 +226,76 @@ def build_runtime(env, args, resume):
                             modules=modules, optimizers=optimizers, context=context, metadata=metadata,
                             reset_reference=reset_reference, reference=reference, control_ids=ids,
                             all_reference_paths=set(reference.paths + reset_reference.paths))
+
+
+def training_env_cfg(cfg):
+    """按实验配置创建 Isaac 环境配置；不启动仿真。"""
+    from x2_style_mimic.tasks.manager_based.x2_style_mimic.x2_supermimic_getup_env_cfg import (
+        X2SuperMimicGetupEnvCfg,
+    )
+
+    env_cfg = X2SuperMimicGetupEnvCfg()
+    env_cfg.scene.num_envs = cfg.num_envs
+    env_cfg.seed = cfg.seed
+    env_cfg.sim.device = cfg.device
+    return env_cfg
+
+
+@contextlib.contextmanager
+def training_environment(cfg, env_cfg):
+    """在已启动的仿真中创建环境并加载检查点；退出时关闭环境。"""
+    import random
+
+    import numpy as np
+    from x2_style_mimic.tasks.manager_based.x2_style_mimic.x2_supermimic_env import (
+        X2SuperMimicEnv,
+    )
+
+    random.seed(cfg.seed)
+    np.random.seed(cfg.seed)
+    torch.manual_seed(cfg.seed)
+
+    checkpoint = (
+        torch.load(cfg.resume, map_location=cfg.device, weights_only=False)
+        if cfg.resume is not None
+        else None
+    )
+    env = X2SuperMimicEnv(env_cfg)
+    try:
+        yield env, checkpoint
+    finally:
+        env.close()
+
+
+def run_training():
+    """解析配置、启动仿真、构建运行时并执行起身实验。"""
+    import sys
+
+    from isaaclab_tasks.utils import (
+        add_launcher_args,
+        launch_simulation,
+        setup_preset_cli,
+    )
+
+    from getup_config import parse_config
+    from getup_training import GetupTrainingRun, file_hashes, semantic_file_hashes
+
+    cfg, launcher = parse_config(
+        launcher_hooks=(add_launcher_args, setup_preset_cli)
+    )
+    cfg.validate()
+    cfg.prepare_output()
+
+    # 参数已解析完毕；清空 argv，避免仿真启动阶段重复解析。
+    sys.argv = [sys.argv[0]]
+
+    source_before = file_hashes((PROJECT / 'source').rglob('*.py'))
+    source_semantic_before = semantic_file_hashes((PROJECT / 'source').rglob('*.py'))
+    env_cfg = training_env_cfg(cfg)
+
+    with launch_simulation(env_cfg, launcher):
+        with training_environment(cfg, env_cfg) as (env, checkpoint):
+            runtime = build_runtime(env, cfg, checkpoint)
+            GetupTrainingRun(
+                runtime, cfg, checkpoint, source_before, source_semantic_before,
+            ).run()

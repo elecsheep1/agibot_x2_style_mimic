@@ -8,7 +8,7 @@ import torch
 from getup_checkpointing import plot_metrics, restore_rng, save_checkpoint
 from getup_config import PROJECT
 from getup_evaluation import build_cohort, evaluate
-from getup_logging import GetupLogger
+from getup_logging import ConsoleTable, GetupLogger
 from getup_warmup import warmup_world_model
 
 
@@ -44,6 +44,16 @@ class GetupTrainingRun:
         self.cohort = build_cohort(runtime, cfg.eval_seed)
         self.metadata = self._metadata()
         self.logger = None
+        self.train_table = ConsoleTable(
+            'train',
+            ('iter', 'world_loss', 'imagined', 'act_rms', 'style', 'progress'),
+            (6, 12, 12, 10, 9, 9),
+        )
+        self.eval_table = ConsoleTable(
+            'eval',
+            ('iter', 'standing', 'progress', 'success', 'max_hold', 'real_ret', 'recomputed'),
+            (6, 10, 10, 9, 10, 12, 12),
+        )
         if checkpoint is not None:
             self._check_resume()
             restore_rng(checkpoint)
@@ -99,20 +109,22 @@ class GetupTrainingRun:
         )
 
     def _evaluate(self, iteration):
-        print(f'[真实评估 {iteration}] 开始，每环境最多 {self.cfg.eval_seconds:g} 秒仿真时间', flush=True)
+        print(f'eval  {iteration}  开始，每环境最多 {self.cfg.eval_seconds:g} 秒', flush=True)
         report = evaluate(self.runtime, self.cohort, self.cfg.eval_seconds, self.cfg.eval_seed)
         self.logger.write_json(f'evaluation_{iteration:06d}.json', report)
         self.logger.record('evaluation', iteration, report['metrics'])
         self.logger.flush()
         metrics = report['metrics']
-        print(
-            f"[真实评估 {iteration}] 站立质量={metrics['standing_quality_mean']:.4f}，"
-            f"任务成功率={metrics['task_success_rate']:.1%}，"
-            f"任务最长稳定={metrics['task_max_hold_seconds']:.2f}s，"
-            f"真实任务回报={metrics['real_task_return']:.4f}，"
-            f"公式重算回报={metrics['recomputed_task_return']:.4f}",
-            flush=True,
-        )
+        progress = metrics.get('proxy_terms/progress')
+        self.eval_table.row((
+            iteration,
+            f"{metrics['standing_quality_mean']:.4f}",
+            f'{progress:+.4f}' if progress is not None else '-',
+            f"{metrics['task_success_rate']:.1%}",
+            f"{metrics['task_max_hold_seconds']:.2f}s",
+            f"{metrics['real_task_return']:+.4f}",
+            f"{metrics['recomputed_task_return']:+.4f}",
+        ))
 
     def _train_iteration(self, iteration):
         cfg = self.cfg
@@ -135,13 +147,15 @@ class GetupTrainingRun:
         metrics['imagined_task_reward'] = metrics['imagined_reward'] - metrics['reward/style']
         self.logger.record('train', iteration, metrics)
         if iteration % cfg.log_interval == 0 or iteration == self.start + 1:
-            print(
-                f'[联合训练 {iteration}/{cfg.iterations}] '
-                f"模型损失={metrics['world_loss']:.6f}，"
-                f"想象任务奖励={metrics['imagined_task_reward']:.6f}，"
-                f"动作RMS={metrics['collection/action_rms']:.3f}",
-                flush=True,
-            )
+            progress = metrics.get('reward/progress')
+            self.train_table.row((
+                iteration,
+                f"{metrics['world_loss']:.6f}",
+                f"{metrics['imagined_task_reward']:+.6f}",
+                f"{metrics['collection/action_rms']:.3f}",
+                f"{metrics['reward/style']:+.4f}",
+                f'{progress:+.4f}' if progress is not None else '-',
+            ))
             self.logger.flush()
 
     def _finish(self):
@@ -177,10 +191,15 @@ class GetupTrainingRun:
 
     def run(self):
         cfg, runtime = self.cfg, self.runtime
-        print(f'[输出目录] {cfg.output}', flush=True)
+        print('SuperMimic 起身训练', flush=True)
+        print(f'  output   {cfg.output}', flush=True)
         print(
-            f"[起身实验] 初始化={runtime.metadata['initialization_mode']}，环境={cfg.num_envs}，"
-            f'模型窗口帧数={list(cfg.world_horizons)}，策略想象={cfg.imagination_horizon}步，联合训练={cfg.iterations}轮',
+            f'  init     {runtime.metadata["initialization_mode"]}'
+            f'    envs {cfg.num_envs}'
+            f'    window {list(cfg.world_horizons)} frames'
+            f' / {[frames - 1 for frames in cfg.world_horizons]} transitions'
+            f'    imagine {cfg.imagination_horizon} steps'
+            f'    iters {cfg.iterations}',
             flush=True,
         )
         with GetupLogger(cfg, self.metadata, self.cohort) as self.logger:

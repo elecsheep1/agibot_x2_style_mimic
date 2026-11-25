@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -17,6 +18,17 @@ spec.loader.exec_module(config)
 
 
 class EntryConfigTests(unittest.TestCase):
+    def test_meta_arguments_are_handled_before_loading_isaac(self):
+        self.assertFalse(config.handle_meta_arguments(['--run-name', 'x']))
+        with patch.object(config, 'parse_config', return_value=(
+                SimpleNamespace(to_dict=lambda: {'run_name': 'x'}),
+                SimpleNamespace(print_config=True))) as parse:
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertTrue(config.handle_meta_arguments(['--print-config']))
+        parse.assert_called_once_with(['--print-config'])
+        self.assertIn('"run_name": "x"', output.getvalue())
+
     def test_agent_config_is_effective_default_for_nested_parameters(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'runner.py'

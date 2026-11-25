@@ -106,14 +106,58 @@ class GetUpTests(unittest.TestCase):
         finally:
             self.task.contact_geometry, self.task.cfg = original_geometry, original_cfg
 
-    def test_standing_quality_and_height_gradient(self):
+    def test_standing_is_gated_and_potential_has_height_gradient(self):
         low = self.standing.clone()
         low[:, 2] = 0.3
-        self.assertTrue(bool((self.task.standing_quality(self.standing) > self.task.standing_quality(low)).all()))
+        # 站立项只负责接近站立后的维持，低位恒为零。
+        self.assertEqual(float(self.task.standing_quality(low).max()), 0.0)
+        self.assertGreater(float(self.task.standing_quality(self.standing).min()), 0.0)
+        # 高度进展由势函数提供。
+        self.assertGreater(float(self.task.geometry_potential(self.standing).min()),
+                           float(self.task.geometry_potential(low).max()))
         low.requires_grad_()
-        self.task.standing_quality(low).sum().backward()
+        self.task.geometry_potential(low).sum().backward()
         self.assertTrue(bool((low.grad[:, 2] > 0).all()))
         self.assertTrue(bool(torch.isfinite(low.grad).all()))
+
+    def test_progress_term_telescopes_with_unit_gamma(self):
+        low = self.standing.clone()
+        low[:, 2] = 0.3
+        high = self.standing.clone()
+        high[:, 2] = 0.65
+        expected = self.cfg.progress_weight * (
+            self.task.geometry_potential(high) - self.task.geometry_potential(low)
+        )
+        _, terms = self.task.reward(low, torch.zeros(2, 2), high,
+                                    torch.empty(2, 0), torch.zeros(2))
+        torch.testing.assert_close(terms['progress'], expected)
+        _, backward_terms = self.task.reward(high, torch.zeros(2, 2), low,
+                                             torch.empty(2, 0), torch.zeros(2))
+        torch.testing.assert_close(terms['progress'] + backward_terms['progress'],
+                                   torch.zeros(2))
+
+    def test_head_contact_reuses_shared_clearance(self):
+        class CountingGeometry(ContactGeometry):
+            def __init__(self):
+                super().__init__()
+                self.calls = 0
+
+            def forward(self, states):
+                self.calls += 1
+                return super().forward(states)
+
+        geometry = CountingGeometry()
+        original = self.task.contact_geometry
+        self.task.contact_geometry = geometry
+        try:
+            self.task.reward(self.standing, torch.zeros(2, 2), self.standing,
+                             torch.empty(2, 0), torch.ones(2))
+            # 站立、势函数和头部接触共用同一次接触几何。
+            self.assertEqual(geometry.calls, 1)
+            with_shared = self.task.head_contact_cost(self.standing, geometry(self.standing))
+            torch.testing.assert_close(self.task.head_contact_cost(self.standing), with_shared)
+        finally:
+            self.task.contact_geometry = original
 
     def test_reward_terms_dt_and_empty_goals(self):
         reward, terms = self.task.reward(self.standing, torch.zeros(2, 2), self.standing,
@@ -126,8 +170,11 @@ class GetUpTests(unittest.TestCase):
                              torch.zeros(2, 3), torch.ones(2))
 
     def test_reward_upper_bound_includes_style_and_dt(self):
-        self.assertAlmostEqual(self.task.max_step_reward,
-                               self.cfg.step_dt * (self.cfg.standing_weight + self.cfg.style_weight))
+        self.assertAlmostEqual(
+            self.task.max_step_reward,
+            self.cfg.step_dt * (self.cfg.standing_weight + self.cfg.style_weight)
+            + self.cfg.progress_weight,
+        )
         reward, _ = self.task.reward(self.standing, torch.zeros(2, 2), self.standing,
                                     torch.empty(2, 0), torch.ones(2))
         self.assertTrue(bool((reward <= self.task.max_step_reward + 1e-7).all()))

@@ -104,7 +104,8 @@ class RewardTermTotals:
                        for name, value in self.proxy.items()})
         aliases = {'standing': 'standing', 'head_contact': 'head_contact',
                    'action_rate': 'action_rate', 'joint_pos_limits': 'joint_limits',
-                   'joint_acc': 'joint_acc', 'out_of_bounds_failure': 'out_of_bounds'}
+                   'joint_acc': 'joint_acc', 'out_of_bounds_failure': 'out_of_bounds',
+                   'getup_progress_reward': 'progress'}
         for real, proxy in aliases.items():
             if real in self.real and proxy in self.proxy:
                 result[f'term_gaps/{real}'] = float((self.real[real][mask] - self.proxy[proxy][mask]).mean())

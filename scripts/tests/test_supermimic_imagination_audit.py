@@ -48,7 +48,7 @@ class ImaginationAuditTests(unittest.TestCase):
             def reward(self, before, action, following, goals, style):
                 return torch.ones(before.shape[0]), {}
         states = torch.zeros(2, 4, 1)
-        actions = torch.zeros(3, 2, 1)
+        actions = torch.zeros(2, 3, 1)
         total = module.task_return(Task(), states, actions, torch.zeros(2, 0))
         torch.testing.assert_close(total, torch.full((2,), 3.0))
 

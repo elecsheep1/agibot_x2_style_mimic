@@ -621,7 +621,7 @@ class GetUpPotentialReward(ManagerTermBase):
         expected_step = int(env.common_step_counter) - 1
 
         if self._captured_step != expected_step:
-            raise RuntimeError("势函数奖励缺少本步动作执行前的状态，请检查 X2MultiMotionGetUpEnv.step 中的捕获调用")
+            raise RuntimeError("势函数奖励缺少本步动作执行前的状态，请检查 X2AMPGetUpEnv.step 中的捕获调用")
 
         potential_after = standing_geometry_potential(
             env,

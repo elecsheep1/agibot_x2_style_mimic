@@ -24,7 +24,9 @@ class X2SuperMimicGetupEnvCfg(X2SuperMimicEnvCfg):
 
             # 正向奖励权重。
             standing_weight=10.0,
-            style_weight=10.0,
+            style_weight=5.0,
+            progress_weight=5.0,
+            progress_gamma=1.0,
             # action_second_difference_weight=0.005,
 
             # 惩罚系数使用正数，奖励函数内部取负。

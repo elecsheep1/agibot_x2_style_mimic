@@ -239,6 +239,18 @@ def read_config(path):
     return GetupTrainConfig.from_mapping(values)
 
 
+def handle_meta_arguments(argv):
+    """不加载 Isaac Sim 处理 --print-config 与 --help；返回是否已处理。"""
+    argv = list(argv)
+    if not {'--print-config', '--help', '-h'} & set(argv):
+        return False
+
+    cfg, arguments = parse_config(argv)
+    if arguments.print_config:
+        print(json.dumps(cfg.to_dict(), indent=2, ensure_ascii=False))
+    return True
+
+
 def parse_config(argv=None, launcher_hooks=None):
     """配置文件 < 检查点旁的原始配置（恢复时）< 显式命令行覆盖。"""
     argv = sys.argv[1:] if argv is None else list(argv)
