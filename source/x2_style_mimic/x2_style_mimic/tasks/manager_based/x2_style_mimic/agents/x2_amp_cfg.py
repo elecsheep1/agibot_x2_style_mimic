@@ -27,7 +27,8 @@ class MultiMotionAMPAlgorithmCfg(RslRlPpoAlgorithmCfg):
 
         "step_dt": 0.02,
         "num_steps": 5,
-        "style_reward_weight": 50.0,
+        "style_reward_mapping": "softplus",
+        "style_reward_weight": 5.0,
 
         # 环境通过 extras 提供门控；默认关闭，保持原版 AMP 行为。
         "reward_gate_enabled": True,
@@ -39,7 +40,7 @@ class MultiMotionAMPAlgorithmCfg(RslRlPpoAlgorithmCfg):
         "head_weight_decay": 1.0e-1,
         "normalization_clip": 10.0,
 
-        "buffer_capacity": 100_000,
+        "buffer_capacity": 500_000,
         "updates_per_iteration": 20,
         "batch_size": 4096,
         # 按本轮实际入池比例缩减判别器更新次数。

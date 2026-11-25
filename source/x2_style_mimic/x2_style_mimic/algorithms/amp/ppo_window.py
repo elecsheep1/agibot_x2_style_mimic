@@ -16,6 +16,7 @@ from x2_style_mimic.tasks.manager_based.x2_style_mimic.mdp.motion_dataset import
 from ...tasks.manager_based.x2_style_mimic.mdp.amp import (
     AMP_FEATURE_VERSION,
 )
+from .style_rewards import style_reward_from_score
 
 class AMPWindowPPO(PPO):
 
@@ -42,6 +43,15 @@ class AMPWindowPPO(PPO):
             raise ValueError("新版 AMP 暂不与 RND 同时启用")
 
         self.amp_cfg = deepcopy(amp_cfg)
+        self.amp_cfg.setdefault(        # style_reward_mapping 决定原始风格奖励的计算方式
+            "style_reward_mapping",
+            "lsgan",
+        )
+        if self.amp_cfg["style_reward_mapping"] not in (
+            "lsgan",
+            "softplus",
+        ):
+            raise ValueError("style_reward_mapping 必须为 lsgan 或 softplus")
         self.amp_cfg.setdefault("reward_gate_enabled", False)
         self.amp_cfg.setdefault("policy_sample_gate_enabled", False)
         # 未指定的新旧入口继续使用固定次数，避免隐式改变旧实验。
@@ -212,7 +222,10 @@ class AMPWindowPPO(PPO):
             with torch.no_grad():
                 # 与原奖励计算使用同一次判别器前向。
                 scores = self.amp_discriminator(windows[valid_mask])                # 计算完整窗口的判别器分数
-                rewards_raw = (1.0 - 0.25 * (scores - 1.0).square()).clamp(0.0, 1.0)# 计算完整窗口的原始风格奖励
+                rewards_raw = style_reward_from_score(
+                    scores,
+                    mapping=self.amp_cfg["style_reward_mapping"],
+                )# 计算完整窗口的原始风格奖励
                 raw_style[valid_mask] = rewards_raw.to(raw_style.dtype)             # 仅在完整窗口处写入原始风格奖励
                 # 固定 0.10 s，方便不同门控时间实验之间比较。
                 getup_mask = hold[valid_mask] <= 0.10                               # 仅在连续稳定时长不超过 0.10 s 的窗口处记录判别器分数和原始奖励
@@ -362,6 +375,7 @@ class AMPWindowPPO(PPO):
             metrics["amp/getup_score_p90"] = quantiles[2].item()
             metrics["amp/getup_reward_raw"] = rewards_raw.mean().item()
             metrics["amp/getup_zero_reward_fraction"] = (rewards_raw <= 0.0).float().mean().item()
+            metrics["amp/getup_score_below_minus_one_fraction"] = (scores <= -1.0).float().mean().item()
             getup_count = scores.numel()
         else:
             # 没有符合条件的窗口时，NaN 表示缺失，不能误记为零。
@@ -371,6 +385,7 @@ class AMPWindowPPO(PPO):
                 "getup_score_p90",
                 "getup_reward_raw",
                 "getup_zero_reward_fraction",
+                "getup_score_below_minus_one_fraction",
             ):
                 metrics[f"amp/{name}"] = float("nan")
             getup_count = 0
@@ -456,8 +471,8 @@ class AMPWindowPPO(PPO):
             gate_defaults = {
                 "reward_gate_enabled": False,
                 "policy_sample_gate_enabled": False,
-                # 旧检查点使用固定更新次数。
                 "dynamic_updates_enabled": False,
+                "style_reward_mapping": "lsgan",
             }
             for key, default in gate_defaults.items():
                 saved_settings.setdefault(key, default)

@@ -7,6 +7,7 @@ from torch import nn
 from ...tasks.manager_based.x2_style_mimic.mdp.amp import (
     AMP_STATE_DIM,
 )
+from .style_rewards import style_reward_from_score
 
 
 class AMPDiscriminator(nn.Module):
@@ -156,23 +157,21 @@ class AMPDiscriminator(nn.Module):
         ).squeeze(-1)
 
     @torch.no_grad()
-    def style_reward(self, current, following):
-        """将相邻状态的判别分数转换为 [0, 1] 风格奖励。"""
-        # 拼接
+    def style_reward(
+        self,
+        current,
+        following,
+        mapping="lsgan",
+    ):
         pairs = torch.cat(
             (current, following),
             dim=-1,
         )
 
-        score = self(pairs)
-
-        # amp奖励计算公式
-        reward = (
-            1.0
-            - 0.25 * (score - 1.0).square()
+        return style_reward_from_score(
+            self(pairs),
+            mapping=mapping,
         )
-
-        return reward.clamp(0.0, 1.0)
 
     def update(self, reference_pairs, policy_pairs):
         """
@@ -302,13 +301,11 @@ class AMPWindowDiscriminator(AMPDiscriminator):
         return normalized.flatten(start_dim=1)  # 展开时间维，变为 [批量, num_steps * state_dim]
 
     @torch.no_grad()
-    def style_reward(self, windows):
-        """根据完整窗口计算 [0, 1] 风格奖励。"""
+    def style_reward(self, windows, mapping="lsgan"):
+        """根据完整窗口计算风格奖励。"""
         score = self(windows)
 
-        reward = (
-            1.0
-            - 0.25 * (score - 1.0).square()
+        return style_reward_from_score(
+            score,
+            mapping=mapping,
         )
-
-        return reward.clamp(0.0, 1.0)
