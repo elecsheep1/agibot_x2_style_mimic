@@ -85,7 +85,10 @@ def standing_reward_comparison(env, params):
         )
     actual = standing_quality(**inputs)
     # Verify the replay-side input extraction against the production reward.
-    expected = standing_quality_reward(env, **params)
+    # standing 势函数的 params 带 gamma；dense standing_quality_reward 不需要它。
+    quality_params = dict(params)
+    quality_params.pop("gamma", None)
+    expected = standing_quality_reward(env, **quality_params)
     if not torch.allclose(actual, expected, atol=1e-6, rtol=1e-5):
         raise RuntimeError("Replay reward extraction disagrees with standing_quality_reward")
     inputs["root_up"] = torch.ones_like(inputs["root_up"])
