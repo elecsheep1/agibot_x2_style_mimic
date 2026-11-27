@@ -163,6 +163,33 @@ class AMPWindowPPO(PPO):
         if not torch.equal(terminal_mask, done_mask):
             raise RuntimeError("AMP 终止掩码与 PPO dones 不一致")
 
+        if self.amp_weight_curriculum.enabled:
+            progress = extras["getup_progress"]
+
+            birth_types = progress["birth_types"].to(self.device)
+            zero_assist = progress["zero_assist_episode"].to(
+                device=self.device,
+                dtype=torch.bool,
+            )
+
+            # 只统计完整结束、整回合零辅助、非 RSI 的回合。
+            eligible = done_mask & zero_assist & (birth_types != 2)
+
+            if bool(eligible.any()):
+                succeeded = progress["succeeded"].to(
+                    device=self.device,
+                    dtype=torch.bool,
+                )
+                stable = progress["stable_at_end"].to(
+                    device=self.device,
+                    dtype=torch.bool,
+                )
+
+                self.amp_weight_curriculum.observe(
+                    succeeded[eligible].detach().cpu().tolist(),
+                    stable[eligible].detach().cpu().tolist(),
+                )
+
         windows, valid_mask = self.amp_history.advance(
             following, done_mask
         )       # 追加最新帧，返回窗口和有效掩码。

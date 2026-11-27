@@ -184,7 +184,7 @@ class X2MultiMotionGetUpEnv(X2AMPGetUpEnv):
         required_hold = float(progress_cfg.params["hold_time"])
         extras["getup_progress"]["zero_assist_episode"] = (episode_force_cap == 0.0)
         extras["getup_progress"]["stable_at_end"] = (
-            snapshot["hold_seconds"] >= required_hold
+            snapshot["hold_seconds"] + 1e-6 >= required_hold
         )
 
         # 使用终止判断阶段保存的真实步后快照。
