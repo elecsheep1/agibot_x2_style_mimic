@@ -9,6 +9,8 @@ remain untouched.
 from __future__ import annotations
 
 import sys
+import signal
+import traceback
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -56,7 +58,23 @@ def main() -> None:
 
     from getup_runtime import run_training
 
-    run_training()
+    previous_sigint_handler = signal.getsignal(signal.SIGINT)
+
+    def report_sigint(_signum, frame):
+        """Expose interrupts that would otherwise look like a silent Kit exit."""
+        print("\n[interrupt] Received SIGINT; Python was executing:", file=sys.stderr)
+        traceback.print_stack(frame, file=sys.stderr)
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGINT, report_sigint)
+    try:
+        run_training()
+    except BaseException:
+        # SimulationApp shutdown can obscure exceptions from the custom runner.
+        traceback.print_exc()
+        raise
+    finally:
+        signal.signal(signal.SIGINT, previous_sigint_handler)
 
 
 if __name__ == "__main__":
