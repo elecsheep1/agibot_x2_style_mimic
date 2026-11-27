@@ -9,11 +9,29 @@ remain untouched.
 from __future__ import annotations
 
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SUPERMIMIC_SCRIPTS = PROJECT_ROOT / "scripts" / "supermimic"
+
+
+@contextmanager
+def _launch_simulation_compat(_env_cfg, args_cli):
+    """Provide the removed Isaac Lab 2 ``launch_simulation`` context manager."""
+    from isaaclab.app import AppLauncher
+
+    app_launcher = AppLauncher(args_cli)
+    try:
+        yield
+    finally:
+        app_launcher.app.close()
+
+
+def _setup_preset_cli_compat(parser):
+    """Parse known launcher arguments when preset support is unavailable."""
+    return parser.parse_known_args()
 
 
 def main() -> None:
@@ -24,9 +42,12 @@ def main() -> None:
     from isaaclab.app import AppLauncher
     import isaaclab_tasks.utils as task_utils
 
-    # Isaac Lab 3 moved this helper onto AppLauncher.  The other two helpers
-    # used by getup_runtime still live in isaaclab_tasks.utils.
+    # Isaac Lab 3 moved/removed these Isaac Lab 2 helpers.  The SuperMimic
+    # runtime only needs ordinary argument parsing and a Kit lifecycle.
     task_utils.add_launcher_args = AppLauncher.add_app_launcher_args
+    task_utils.launch_simulation = _launch_simulation_compat
+    if not hasattr(task_utils, "setup_preset_cli"):
+        task_utils.setup_preset_cli = _setup_preset_cli_compat
 
     from getup_config import handle_meta_arguments
 
