@@ -21,3 +21,10 @@ window to stop; `--viz none` runs 100 zero-action simulation steps and exits.
 ```bash
 python scripts/isaaclab3_migration/zero_agent_x2.py --viz kit
 ```
+
+Run the SuperMimic get-up trainer through its Isaac Lab 3 compatibility shim:
+
+```bash
+python scripts/isaaclab3_migration/train_supermimic_getup.py \
+  --config scripts/supermimic/configs/getup_long.toml
+```
