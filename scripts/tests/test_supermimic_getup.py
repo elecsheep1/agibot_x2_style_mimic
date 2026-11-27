@@ -106,35 +106,28 @@ class GetUpTests(unittest.TestCase):
         finally:
             self.task.contact_geometry, self.task.cfg = original_geometry, original_cfg
 
-    def test_standing_is_gated_and_potential_has_height_gradient(self):
+    def test_standing_geometry_supplies_low_height_gradient(self):
         low = self.standing.clone()
         low[:, 2] = 0.3
-        # 站立项只负责接近站立后的维持，低位恒为零。
-        self.assertEqual(float(self.task.standing_quality(low).max()), 0.0)
-        self.assertGreater(float(self.task.standing_quality(self.standing).min()), 0.0)
-        # 高度进展由势函数提供。
-        self.assertGreater(float(self.task.geometry_potential(self.standing).min()),
-                           float(self.task.geometry_potential(low).max()))
+        # 低位由 geometry 分支提供反馈，站立维持分支尚未开启。
+        expected = torch.full((2,), .35 * (.3 - .08) / (.63 - .08))
+        torch.testing.assert_close(self.task.standing_quality(low), expected)
+        self.assertTrue(bool((self.task.standing_quality(self.standing) > expected).all()))
         low.requires_grad_()
-        self.task.geometry_potential(low).sum().backward()
+        self.task.standing_quality(low).sum().backward()
         self.assertTrue(bool((low.grad[:, 2] > 0).all()))
         self.assertTrue(bool(torch.isfinite(low.grad).all()))
 
-    def test_progress_term_telescopes_with_unit_gamma(self):
+    def test_current_task_terms_exclude_removed_progress(self):
         low = self.standing.clone()
-        low[:, 2] = 0.3
-        high = self.standing.clone()
-        high[:, 2] = 0.65
-        expected = self.cfg.progress_weight * (
-            self.task.geometry_potential(high) - self.task.geometry_potential(low)
-        )
-        _, terms = self.task.reward(low, torch.zeros(2, 2), high,
-                                    torch.empty(2, 0), torch.zeros(2))
-        torch.testing.assert_close(terms['progress'], expected)
-        _, backward_terms = self.task.reward(high, torch.zeros(2, 2), low,
-                                             torch.empty(2, 0), torch.zeros(2))
-        torch.testing.assert_close(terms['progress'] + backward_terms['progress'],
-                                   torch.zeros(2))
+        low[:, 2] = .3
+        reward, terms = self.task.reward(low, torch.zeros(2, 2), low,
+                                        torch.empty(2, 0), torch.zeros(2))
+        self.assertEqual(set(terms), {'standing', 'style', 'action_rate', 'joint_limits',
+                                     'joint_acc', 'out_of_bounds', 'head_contact'})
+        torch.testing.assert_close(terms['standing'],
+            self.task.standing_quality(low) * self.cfg.standing_weight * self.cfg.step_dt)
+        torch.testing.assert_close(reward, torch.stack(list(terms.values())).sum(0))
 
     def test_head_contact_reuses_shared_clearance(self):
         class CountingGeometry(ContactGeometry):
@@ -172,8 +165,7 @@ class GetUpTests(unittest.TestCase):
     def test_reward_upper_bound_includes_style_and_dt(self):
         self.assertAlmostEqual(
             self.task.max_step_reward,
-            self.cfg.step_dt * (self.cfg.standing_weight + self.cfg.style_weight)
-            + self.cfg.progress_weight,
+            self.cfg.step_dt * (self.cfg.standing_weight + self.cfg.style_weight),
         )
         reward, _ = self.task.reward(self.standing, torch.zeros(2, 2), self.standing,
                                     torch.empty(2, 0), torch.ones(2))

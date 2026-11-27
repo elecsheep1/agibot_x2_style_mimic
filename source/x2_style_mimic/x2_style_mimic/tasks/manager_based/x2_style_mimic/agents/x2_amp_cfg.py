@@ -32,7 +32,7 @@ class MultiMotionAMPAlgorithmCfg(RslRlPpoAlgorithmCfg):
         "style_reward_weight": 15.0,
 
         "weight_curriculum": {
-            "enabled": True,
+            "enabled": False,
             "min_weight": 5.0,
             "max_weight": 20.0,
             "increment": 0.5,

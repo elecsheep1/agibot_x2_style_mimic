@@ -19,6 +19,9 @@ class X2SuperMimicEnvCfg(
         # 不施加训练中的随机速度跳变。
         self.events.standing_perturbation = None
 
+        # 想象任务未使用一次性成功奖励，真实环境也关闭该项。
+        self.rewards.success_bonus = None
+
         # 不使用自碰撞奖励和专用自接触传感器。
         # 机器人资产中的物理自碰撞继续保留。
         self.rewards.self_contact = None
