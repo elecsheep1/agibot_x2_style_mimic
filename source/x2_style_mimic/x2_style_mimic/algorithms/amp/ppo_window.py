@@ -17,6 +17,7 @@ from ...tasks.manager_based.x2_style_mimic.mdp.amp import (
     AMP_FEATURE_VERSION,
 )
 from .style_rewards import style_reward_from_score
+from .weight_curriculum import AMPWeightCurriculum
 
 class AMPWindowPPO(PPO):
 
@@ -43,6 +44,13 @@ class AMPWindowPPO(PPO):
             raise ValueError("新版 AMP 暂不与 RND 同时启用")
 
         self.amp_cfg = deepcopy(amp_cfg)
+
+        self.amp_cfg.setdefault("weight_curriculum", {"enabled": False})
+        self.amp_weight_curriculum = AMPWeightCurriculum(
+            self.amp_cfg["weight_curriculum"],
+            fixed_weight=self.amp_cfg["style_reward_weight"],
+        )
+
         self.amp_cfg.setdefault(        # style_reward_mapping 决定原始风格奖励的计算方式
             "style_reward_mapping",
             "lsgan",
@@ -252,7 +260,7 @@ class AMPWindowPPO(PPO):
         self._amp_step_count += 1
 
         scale = (
-            self.amp_cfg["style_reward_weight"]
+            self.amp_weight_curriculum.weight
             * self.amp_cfg["step_dt"]
         )
         rewards.add_(scale * gated_style.to(rewards.device))
@@ -335,10 +343,19 @@ class AMPWindowPPO(PPO):
 
         metrics["amp/style_reward_raw"] = raw_style
         metrics["amp/style_reward_gated"] = gated_style
-        metrics["amp/style_reward_scaled"] = (              # scaled 风格奖励是原始风格奖励乘以权重和 dt
+        # 当前 rollout 实际使用的权重。
+        used_weight = self.amp_weight_curriculum.weight
+        metrics["amp/style_reward_scaled"] = (
             gated_style
-            * self.amp_cfg["style_reward_weight"]
+            * used_weight
             * self.amp_cfg["step_dt"]
+        )
+        metrics["amp/style_weight"] = used_weight
+        success_rate, stable_rate = self.amp_weight_curriculum.rates()
+        metrics["amp/curriculum_success_rate"] = success_rate
+        metrics["amp/curriculum_stable_at_end_rate"] = stable_rate
+        metrics["amp/curriculum_episode_count"] = float(
+            len(self.amp_weight_curriculum.records)
         )
         metrics["amp/reward_gate_mean"] = self._amp_reward_gate_sum / count
         metrics["amp/policy_window_ratio"] = self._amp_policy_window_sum / count
@@ -412,6 +429,14 @@ class AMPWindowPPO(PPO):
         # 不清零 _amp_update_credit，保留不足一次更新的余额。
 
         # 不清空历史：同一回合允许跨 PPO 迭代继续积累。
+        # 当前 rollout 的奖励与日志已经计算完。
+        # 新权重从下一轮 rollout 开始使用。
+        self.amp_weight_curriculum.advance()
+
+        metrics["amp/style_weight_next"] = (
+            self.amp_weight_curriculum.weight
+        )
+
         return metrics
 
     def _reference_fingerprint(self):
@@ -434,6 +459,10 @@ class AMPWindowPPO(PPO):
 
     def save(self):
         checkpoint = super().save()
+
+        checkpoint["amp_weight_curriculum"] = (
+            self.amp_weight_curriculum.state_dict()
+        )
 
         checkpoint["amp_window"] = {
             "feature_version": AMP_FEATURE_VERSION + "_window_v1",
@@ -512,6 +541,16 @@ class AMPWindowPPO(PPO):
         load_iteration = super().load(
             loaded_dict, load_cfg, strict
         )
+
+        if load_amp:
+            curriculum_state = loaded_dict.get("amp_weight_curriculum")
+
+            if curriculum_state is not None:
+                self.amp_weight_curriculum.load_state_dict(
+                    curriculum_state
+                )
+            elif self.amp_weight_curriculum.enabled:
+                raise ValueError("checkpoint 缺少 AMP 权重课程状态；请使用新训练，或显式设计旧 checkpoint 的迁移。")
 
         # 恢复优化器时，同步 PPO 自适应学习率状态。
         restore_optimizer = (

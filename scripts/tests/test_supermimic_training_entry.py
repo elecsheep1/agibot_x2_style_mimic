@@ -69,16 +69,27 @@ class TrainingEntryTests(unittest.TestCase):
         torch.testing.assert_close(totals.first_success, torch.tensor([5., 8.]))
         self.assertEqual(totals.success.tolist(), [True, True])
 
+    def test_success_bonus_is_excluded_from_comparable_return(self):
+        totals = evaluation.TaskEvaluationTotals(1, 'cpu')
+        progress = dict(succeeded=torch.tensor([False]), hold_seconds=torch.tensor([0.]),
+                        max_hold_seconds=torch.tensor([0.]), first_success_time=torch.tensor([-1.]))
+        active = torch.tensor([True])
+        totals.update(active, torch.tensor([32.]), torch.tensor([2.]), progress, torch.tensor([30.]))
+        torch.testing.assert_close(totals.success_bonus_return, torch.tensor([30.]))
+        torch.testing.assert_close(totals.comparable_return(), torch.tensor([2.]))
+
     def test_reward_term_totals_mask_and_gap(self):
         totals = evaluation.RewardTermTotals(2, 'cpu')
         totals.update(torch.tensor([True, True]), {'standing': torch.tensor([1., 2.])},
-                      {'progress': torch.tensor([.5, 1.])})
+                      {'standing': torch.tensor([.5, 1.]), 'progress': torch.tensor([.5, 1.])})
         totals.update(torch.tensor([False, True]), {'standing': torch.tensor([999., 3.])},
-                      {'progress': torch.tensor([999., 2.])})
+                      {'standing': torch.tensor([999., 2.]), 'progress': torch.tensor([999., 2.])})
         metrics = totals.metrics(torch.tensor([True, True]))
         self.assertEqual(metrics['real_terms/standing'], 3.)
         self.assertEqual(metrics['proxy_terms/progress'], 1.75)
+        # 真实与想象 standing 都是维持项；progress 没有真实对应项。
         self.assertEqual(metrics['term_gaps/standing'], 1.25)
+        self.assertNotIn('term_gaps/progress', metrics)
 
     def test_actual_reward_terms_apply_dt_once_and_check_sum(self):
         env = SimpleNamespace(num_envs=2, step_dt=.02,

@@ -259,8 +259,8 @@ class GetUpEventsCfg:
 @configclass
 class GetUpRewardsCfg:
     standing = RewTerm(
-        func=getup_mdp.StandingQualityPotential,
-        weight=4.0,
+        func=getup_mdp.standing_quality_reward,
+        weight=10.0,
         params={
             "torso_cfg": SceneEntityCfg(
                 "robot",
@@ -311,39 +311,6 @@ class GetUpRewardsCfg:
             "stance_width": 0.34,
             "toe_out_rad": 0.08726646,
             "limb_fraction": 0.20,
-            "gamma": 0.99,
-        },
-    )
-
-    getup_tracking = RewTerm(
-        func=getup_mdp.getup_tracking_reward,
-        weight=8.0,
-        params={
-            "head_cfg": SceneEntityCfg(
-                "robot",
-                body_names=["head_pitch_link"],
-                preserve_order=True,
-            ),
-            "torso_cfg": SceneEntityCfg(
-                "robot",
-                body_names=["torso_link"],
-                preserve_order=True,
-            ),
-            "ground_sensor_cfgs": (
-                SceneEntityCfg("left_foot_ground_contact"),
-                SceneEntityCfg("right_foot_ground_contact"),
-            ),
-            "target_head_height": 1.08,
-            "height_sigma": 0.25,
-            "root_tilt_sigma": 0.40,
-            "torso_tilt_sigma": 0.50,
-            "target_root_height": 0.64,
-            "root_height_sigma": 0.12,
-            "support_floor": 0.25,
-            "stability_linear_sigma": 0.35,
-            "stability_angular_sigma": 0.80,
-            "post_fraction": 0.60,
-            "decay_time": 0.75,
         },
     )
 

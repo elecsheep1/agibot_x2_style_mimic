@@ -28,20 +28,35 @@ class MultiMotionAMPAlgorithmCfg(RslRlPpoAlgorithmCfg):
         "step_dt": 0.02,
         "num_steps": 5,
         "style_reward_mapping": "softplus",
-        "style_reward_weight": 5.0,
+        # 动态课程关闭时使用；启用后实际权重由课程维护。
+        "style_reward_weight": 15.0,
+
+        "weight_curriculum": {
+            "enabled": True,
+            "min_weight": 5.0,
+            "max_weight": 20.0,
+            "increment": 0.5,
+            "check_interval": 100,
+            "window_size": 2000,
+            "min_episodes": 500,
+            "raise_success_rate": 0.80,
+            "raise_stable_rate": 0.75,
+            "lower_success_rate": 0.60,
+            "lower_stable_rate": 0.55,
+        },
 
         # 环境通过 extras 提供门控；默认关闭，保持原版 AMP 行为。
         "reward_gate_enabled": True,
         "policy_sample_gate_enabled": True,
 
         "learning_rate": 5e-5,
-        "gradient_penalty": 10.0,
+        "gradient_penalty": 15.0,
         "trunk_weight_decay": 1.0e-3,
         "head_weight_decay": 1.0e-1,
         "normalization_clip": 10.0,
 
         "buffer_capacity": 500_000,
-        "updates_per_iteration": 20,
+        "updates_per_iteration": 5,
         "batch_size": 4096,
         # 按本轮实际入池比例缩减判别器更新次数。
         "dynamic_updates_enabled": True,

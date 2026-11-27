@@ -480,155 +480,6 @@ def head_contact_penalty(
     # 两个头部刚体同时接触也只计一次。
     return contact.any(dim=-1).float()
 
-def getup_tracking_reward(
-    env,
-    head_cfg: SceneEntityCfg,
-    torso_cfg: SceneEntityCfg,
-    ground_sensor_cfgs: tuple[SceneEntityCfg, ...],
-    target_head_height: float = 1.08,
-    height_sigma: float = 0.25,
-    root_tilt_sigma: float = 0.40,
-    torso_tilt_sigma: float = 0.50,
-    target_root_height: float = 0.64,
-    root_height_sigma: float = 0.12,
-    support_floor: float = 0.25,
-    stability_linear_sigma: float = 0.35,
-    stability_angular_sigma: float = 0.80,
-    post_fraction: float = 0.60,
-    decay_time: float = 0.75,
-):
-    """完整站立姿态跟踪；success 后按 decay_time 平滑降权。"""
-    robot = env.scene[head_cfg.name]
-
-    # ==================== 头高 ====================
-    head_pose = robot.data.body_link_pose_w.torch[:, head_cfg.body_ids]
-    if head_pose.shape[1] != 1:
-        raise ValueError("head_cfg 必须匹配一个头部刚体")
-    head_height = head_pose[:, 0, 2] - env.scene.env_origins[:, 2]
-
-    # ==================== 根/骨盆高度 ====================
-    root_height = (
-        robot.data.root_pos_w.torch[:, 2]
-        - env.scene.env_origins[:, 2]
-    )
-
-    # ==================== 直立度 ====================
-    root_up = -robot.data.projected_gravity_b.torch[:, 2]
-    torso_q = robot.data.body_link_pose_w.torch[
-        :, torso_cfg.body_ids, 3:7
-    ]
-    torso_q = torso_q / torso_q.norm(dim=-1, keepdim=True).clamp_min(1e-8)
-    torso_up = (
-        1.0 - 2.0 * torso_q[..., :2].square().sum(dim=-1)
-    ).amin(dim=-1)
-
-    # ==================== 双脚接触 ====================
-    feet_contact = torch.stack(
-        [
-            ground_contact_force(env, cfg) > 5.0
-            for cfg in ground_sensor_cfgs
-        ],
-        dim=-1,
-    ).float()
-    feet_contact_fraction = feet_contact.mean(dim=-1)
-    support = support_floor + (1.0 - support_floor) * feet_contact_fraction
-
-    # ==================== 速度稳定性 ====================
-    root_velocity = robot.data.root_link_vel_w.torch
-    linear_velocity = root_velocity[:, :3]
-    angular_velocity = root_velocity[:, 3:6]
-    stability = torch.exp(
-        -linear_velocity.square().sum(dim=-1)
-        / stability_linear_sigma**2
-        - angular_velocity.square().sum(dim=-1)
-        / stability_angular_sigma**2
-    )
-
-    # ==================== 参数检查 ====================
-    for sigma in (
-        height_sigma,
-        root_tilt_sigma,
-        torso_tilt_sigma,
-        root_height_sigma,
-        stability_linear_sigma,
-        stability_angular_sigma,
-    ):
-        if not math.isfinite(sigma) or sigma <= 0:
-            raise ValueError("高斯宽度必须为正的有限数")
-    for target in (target_head_height, target_root_height):
-        if not math.isfinite(target):
-            raise ValueError("目标高度必须为有限数")
-    if not 0.0 <= support_floor <= 1.0:
-        raise ValueError("support_floor 必须在 [0, 1] 内")
-    if not 0.0 <= post_fraction <= 1.0:
-        raise ValueError("post_fraction 必须在 [0, 1] 内")
-    if not math.isfinite(decay_time) or decay_time <= 0:
-        raise ValueError("decay_time 必须为正的有限数")
-
-        # ==================== 双向目标误差 ====================
-    height_error = (
-        (head_height - target_head_height) / height_sigma
-    )
-    root_height_error = (
-        (root_height - target_root_height) / root_height_sigma
-    )
-    root_error = (
-        root_up.clamp(-1.0, 1.0).acos() / root_tilt_sigma
-    )
-    torso_error = (
-        torso_up.clamp(-1.0, 1.0).acos() / torso_tilt_sigma
-    )
-
-    # 长尾评分，低位保留反馈，目标两侧均受到惩罚。
-    error_energy = (
-        0.10 * height_error.square()
-        + 0.40 * root_height_error.square()
-        + 0.25 * root_error.square()
-        + 0.25 * torso_error.square()
-    )
-    pose_quality = 1.0 / (1.0 + error_energy)
-
-    # 接近目标根高度时，逐渐要求稳定和双脚支撑。
-    near_standing = (
-        (root_height - 0.48) / (0.60 - 0.48)
-    ).clamp(0.0, 1.0)
-    near_standing = smoothstep(near_standing)
-
-    upright_gate = (
-        (torch.minimum(root_up, torso_up) - 0.50)
-        / (math.cos(math.radians(10.0)) - 0.50)
-    ).clamp(0.0, 1.0)
-
-    standing_score = 0.65 * stability + 0.35 * support
-
-    pose_weight = 0.35
-    quality = (
-        pose_weight * pose_quality
-        + (1.0 - pose_weight)
-        * near_standing
-        * upright_gate
-        * standing_score
-    )
-
-    # ==================== success 后平滑降权 ====================
-    snapshot = env._getup_progress_snapshot
-    succeeded = snapshot["succeeded"]
-    first_success = snapshot["first_success_time"]
-    elapsed = env.episode_length_buf * env.step_dt
-
-    since_success = (elapsed - first_success).clamp_min(0.0)
-    blend = (since_success / decay_time).clamp(0.0, 1.0)
-    blend = blend.square() * (3.0 - 2.0 * blend)   # smoothstep
-
-    factor = 1.0 - (1.0 - post_fraction) * blend
-    factor = torch.where(
-        succeeded,
-        factor,
-        torch.ones_like(factor),
-    )
-
-    return quality * factor
-
 def standing_limb_quality(
     env: ManagerBasedRLEnv,
     joint_cfg: SceneEntityCfg,
@@ -730,18 +581,18 @@ def standing_quality(
 ):
     """有界站立质量，输出范围约为 [0, 1]。"""
 
-    # # ------------------------------- 高度指标 ------------------------------
-    # # 从低位到站立高度提供连续反馈。
-    # height_progress = (
-    #     (height - 0.08) / (0.63 - 0.08)     # 高度范围从 0.08 到 0.63 米
-    # ).clamp(0.0, 1.0)
+    # ------------------------------- 高度指标 ------------------------------
+    # 从低位到站立高度提供连续反馈。
+    height_progress = (
+        (height - 0.08) / (0.63 - 0.08)     # 高度范围从 0.08 到 0.63 米
+    ).clamp(0.0, 1.0)
 
-    # # ------------------------------- 姿态指标 ------------------------------
-    # root_quality = (root_up.clamp(-1.0, 1.0) + 1.0) * 0.5
-    # torso_quality = (torso_up.clamp(-1.0, 1.0) + 1.0) * 0.5
-    # posture_quality = 0.5 * (root_quality + torso_quality)
+    # ------------------------------- 姿态指标 ------------------------------
+    root_quality = (root_up.clamp(-1.0, 1.0) + 1.0) * 0.5
+    torso_quality = (torso_up.clamp(-1.0, 1.0) + 1.0) * 0.5
+    posture_quality = 0.5 * (root_quality + torso_quality)
 
-    # geometry_quality = height_progress * (0.25 + 0.75 * posture_quality)
+    geometry_quality = height_progress * (0.25 + 0.75 * posture_quality)
 
     # ----------------------------- 接近站立门控 -----------------------------
     # 站立质量逐渐接管，前期不要求手部卸载或完全静止。
@@ -757,12 +608,12 @@ def standing_quality(
     linear_speed = linear_velocity.norm(dim=-1)
     angular_speed = angular_velocity.norm(dim=-1)
 
-    linear_excess = (linear_speed - 0.10).clamp_min(0.0)
-    angular_excess = (angular_speed - 0.20).clamp_min(0.0)
+    linear_excess = (linear_speed - 0.04).clamp_min(0.0)
+    angular_excess = (angular_speed - 0.15).clamp_min(0.0)
 
     stability_quality = torch.exp(
-        -linear_excess.square() / 0.35**2
-        - angular_excess.square() / 0.60**2
+        -linear_excess.square() / 0.18**2
+        - angular_excess.square() / 0.32**2
     )
     # ---------------------------- 支撑质量指标 ----------------------------
     # 双脚接触不要求左右承重完全相等。
@@ -786,7 +637,9 @@ def standing_quality(
     )
 
     return (
-        near_standing
+        0.35 * geometry_quality
+        + 0.65
+        * near_standing
         * upright_gate
         * standing_score
         * limb_factor
@@ -866,54 +719,6 @@ def standing_quality_reward(
         limb_fraction=limb_fraction
     )
     return standing
-
-class StandingQualityPotential(ManagerTermBase):
-    """首次成功后锁存启用的完整站立质量势函数。"""
-
-    def __init__(self, cfg, env):
-        super().__init__(cfg, env)
-        gamma = float(cfg.params.get("gamma", 0.99))
-        if not math.isfinite(gamma) or not 0 <= gamma <= 1:
-            raise ValueError("gamma 必须在 [0, 1] 内")
-        self._before = torch.zeros(env.num_envs, device=env.device)
-        self._active = torch.zeros(env.num_envs, device=env.device, dtype=torch.bool)
-        self._captured_step = -1
-
-    @torch.no_grad()
-    def capture_before_step(self, env):
-        params = dict(self.cfg.params)
-        params.pop("gamma", None)
-        quality = standing_quality_reward(env, **params)
-        self._before.copy_(quality * self._active)
-        self._captured_step = int(env.common_step_counter)
-
-    def reset(self, env_ids=None):
-        ids = slice(None) if env_ids is None else env_ids
-        self._before[ids] = 0.0
-        self._active[ids] = False
-        self._captured_step = -1
-
-    def __call__(
-        self, env, torso_cfg, ground_sensor_cfgs, wrist_sensor_cfgs,
-        limb_joint_cfg=None, feet_cfg=None, limb_joint_targets=None,
-        stance_width=0.34, toe_out_rad=0.08726646,
-        limb_fraction=0.10, gamma=0.99,
-    ):
-        if self._captured_step != int(env.common_step_counter) - 1:
-            raise RuntimeError("缺少动作执行前的站立势函数，请检查环境 step 钩子")
-        quality = standing_quality_reward(
-            env, torso_cfg=torso_cfg,
-            ground_sensor_cfgs=ground_sensor_cfgs,
-            wrist_sensor_cfgs=wrist_sensor_cfgs,
-            limb_joint_cfg=limb_joint_cfg, feet_cfg=feet_cfg,
-            limb_joint_targets=limb_joint_targets,
-            stance_width=stance_width, toe_out_rad=toe_out_rad,
-            limb_fraction=limb_fraction,
-        )
-        self._active |= env._getup_progress_snapshot["succeeded"]
-        after = quality * self._active
-        after = torch.where(env.termination_manager.terminated, torch.zeros_like(after), after)
-        return (gamma * after - self._before) / env.step_dt
 
 class GetUpSuccessBonus(ManagerTermBase):
     """首次 success 时一次性发放的里程碑奖励。"""

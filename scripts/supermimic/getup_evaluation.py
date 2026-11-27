@@ -102,11 +102,9 @@ class RewardTermTotals:
                   for name, value in self.real.items()}
         result.update({f'proxy_terms/{name}': float(value[mask].mean())
                        for name, value in self.proxy.items()})
-        # 真实环境重构后：getup_tracking 是密集姿态项，standing 是势函数项。
-        # 代理的 standing/progress 与它们结构对应，但势函数定义并不完全相同，
-        # 因此 term_gaps 只看趋势，不做严格数值对齐。
-        aliases = {'getup_tracking': 'standing', 'standing': 'progress',
-                   'head_contact': 'head_contact',
+        # 真实与想象 standing 都是接近站立后的维持项；progress 只存在于想象任务，
+        # 没有真实对应项（真实侧的一次性成功奖励也单独统计，不进入 term_gaps）。
+        aliases = {'standing': 'standing', 'head_contact': 'head_contact',
                    'action_rate': 'action_rate', 'joint_pos_limits': 'joint_limits',
                    'joint_acc': 'joint_acc', 'out_of_bounds_failure': 'out_of_bounds'}
         for real, proxy in aliases.items():
@@ -120,18 +118,26 @@ class TaskEvaluationTotals:
 
     def __init__(self, count, device):
         self.actual_return = torch.zeros(count, device=device)
+        self.success_bonus_return = torch.zeros(count, device=device)
         self.recomputed_return = torch.zeros(count, device=device)
         self.success = torch.zeros(count, dtype=torch.bool, device=device)
         self.final_hold = torch.zeros(count, device=device)
         self.max_hold = torch.zeros(count, device=device)
         self.first_success = torch.full((count,), -1., device=device)
 
-    def update(self, active, actual_reward, recomputed_reward, progress):
+    def update(self, active, actual_reward, recomputed_reward, progress, success_bonus=None):
+        if success_bonus is None:
+            success_bonus = torch.zeros_like(actual_reward)
         self.actual_return += torch.where(active, actual_reward, 0.)
+        self.success_bonus_return += torch.where(active, success_bonus, 0.)
         self.recomputed_return += torch.where(active, recomputed_reward, 0.)
         for target, key in ((self.success, 'succeeded'), (self.final_hold, 'hold_seconds'),
                             (self.max_hold, 'max_hold_seconds'), (self.first_success, 'first_success_time')):
             target.copy_(torch.where(active, progress[key], target))
+
+    def comparable_return(self):
+        """真实回报扣除一次性成功奖励，与想象公式口径一致。"""
+        return self.actual_return - self.success_bonus_return
 
 
 @torch.no_grad()
@@ -205,7 +211,8 @@ def evaluate(runtime, cohort, seconds, seed):
                 raw_task, proxy_terms = trainer.task.reward(current, action, following, goals, torch.zeros_like(style_reward))
                 term_totals.update(mask, real_terms, proxy_terms)
                 raw_total, _ = trainer.task.reward(current, action, following, goals, style_reward)
-                task_totals.update(mask, actual_reward, raw_task, extras['getup_progress'])
+                task_totals.update(mask, actual_reward, raw_task, extras['getup_progress'],
+                                   real_terms.get('success_bonus'))
                 quality = trainer.task.standing_quality(following)
                 fields = unpack_state(following, env.world_state_spec)
                 body_pose, _ = trainer.task.kinematics(fields['root_pose'], fields['root_velocity'], fields['joint_position'], fields['joint_velocity'])
@@ -259,7 +266,8 @@ def evaluate(runtime, cohort, seconds, seed):
                     real_task_return=float(task_totals.actual_return[mask].mean()),
                     recomputed_task_return=float(task_totals.recomputed_return[mask].mean()),
                     recomputed_total_return=float(total_return[mask].mean()),
-                    task_return_gap=float((task_totals.actual_return[mask] - task_totals.recomputed_return[mask]).mean()),
+                    task_return_gap=float((task_totals.comparable_return() - task_totals.recomputed_return)[mask].mean()),
+                    success_bonus_return=float(task_totals.success_bonus_return[mask].mean()),
                     real_task_reward_mean_per_step=float(task_totals.actual_return[mask].sum() / steps[mask].sum().clamp_min(1)),
                     task_success_rate=float(task_totals.success[mask].float().mean()),
                     task_stable_at_end_rate=float((task_totals.final_hold[mask] >= required_hold).float().mean()),

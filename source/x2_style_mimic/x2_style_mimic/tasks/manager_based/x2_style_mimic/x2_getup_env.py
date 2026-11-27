@@ -117,6 +117,8 @@ class X2MultiMotionGetUpEnv(X2AMPGetUpEnv):
             self._getup_reference_motion_ids.clone()
         )
         birth_types = self._getup_birth_types.clone()
+        # 必须在 step 前保存，自动重置后这些值属于下一回合。
+        episode_force_cap = self._getup_assist.episode_force.clone()
         bank_row_ids = self._getup_bank_row_ids.clone()
         recovery_row_ids = self._getup_recovery_row_ids.clone()
 
@@ -177,6 +179,13 @@ class X2MultiMotionGetUpEnv(X2AMPGetUpEnv):
         extras["getup_progress"]["birth_types"] = birth_types
         extras["getup_progress"]["bank_row_ids"] = bank_row_ids
         extras["getup_progress"]["recovery_row_ids"] = recovery_row_ids
+
+        progress_cfg = self.termination_manager.get_term_cfg("progress")
+        required_hold = float(progress_cfg.params["hold_time"])
+        extras["getup_progress"]["zero_assist_episode"] = (episode_force_cap == 0.0)
+        extras["getup_progress"]["stable_at_end"] = (
+            snapshot["hold_seconds"] >= required_hold
+        )
 
         # 使用终止判断阶段保存的真实步后快照。
         # 即使本步自动重置，也不会读到下一回合的稳定时长。
