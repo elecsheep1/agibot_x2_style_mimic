@@ -48,8 +48,10 @@ def main() -> None:
     # runtime only needs ordinary argument parsing and a Kit lifecycle.
     task_utils.add_launcher_args = AppLauncher.add_app_launcher_args
     task_utils.launch_simulation = _launch_simulation_compat
-    if not hasattr(task_utils, "setup_preset_cli"):
-        task_utils.setup_preset_cli = _setup_preset_cli_compat
+    # The current helper applies Isaac Lab task presets and overwrites the
+    # SuperMimic TOML's ``num_envs`` (32) with 4096.  This trainer does not use
+    # Isaac Lab presets, so always use a plain parse-known-args implementation.
+    task_utils.setup_preset_cli = _setup_preset_cli_compat
 
     from getup_config import handle_meta_arguments
 
