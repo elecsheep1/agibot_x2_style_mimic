@@ -34,11 +34,6 @@ class GetupTaskCfg:
     head_contact_distance: float = 0.005
     # 从零惩罚到满惩罚的距离跨度，单位米。
     head_contact_transition: float = 0.010
-    # 势函数进展奖励
-    progress_weight: float = 5.0
-    # 势函数折扣；1.0 时整段求和等于终态势减初态势，无法靠悬停刷取。
-    progress_gamma: float = 1.0
-
 
 class GetupTask(nn.Module):
     """倒地起身任务的可微奖励与终止判断。"""
@@ -83,13 +78,10 @@ class GetupTask(nn.Module):
             cfg.joint_acc_weight,
             cfg.boundary_weight,
             cfg.head_contact_weight,
-            cfg.progress_weight,
         )
 
         if min(weights) < 0:
             raise ValueError("奖励和惩罚权重必须为非负数")
-        if not 0.0 <= cfg.progress_gamma <= 1.0:
-            raise ValueError("progress_gamma 必须在 [0, 1] 内")
         if cfg.contact_distance < 0:
             raise ValueError("接触距离阈值不能为负")
 
@@ -199,13 +191,10 @@ class GetupTask(nn.Module):
 
     @property
     def max_step_reward(self):
-        """单步总奖励理论上限；势函数项已抵消公共 dt。"""
-        return (
-            self.cfg.step_dt * (
-                self.cfg.standing_weight
-                + self.cfg.style_weight
-            )
-            + self.cfg.progress_weight
+        """包含 AMP 在内的单步总奖励理论上限。"""
+        return self.cfg.step_dt * (
+            self.cfg.standing_weight
+            + self.cfg.style_weight
         )
 
     def upright_fields(self, state):
@@ -226,8 +215,8 @@ class GetupTask(nn.Module):
         return fields, height, root_up, torso_up
 
     @staticmethod
-    def posture_potential(height, root_up, torso_up):
-        """与真实环境 standing_geometry_potential 同一口径，范围 [0, 1]。"""
+    def geometry_quality(height, root_up, torso_up):
+        """高度进展乘以姿态权重，与真实环境 standing_quality 的 geometry 项一致。"""
         height_progress = (
             (height - 0.08) / (0.63 - 0.08)
         ).clamp(0.0, 1.0)
@@ -239,21 +228,16 @@ class GetupTask(nn.Module):
 
         return height_progress * (0.25 + 0.75 * posture_quality)
 
-    def geometry_potential(self, state):
-        """势函数只需要姿态，不计算接触几何。"""
-        _, height, root_up, torso_up = self.upright_fields(state)
-        return self.posture_potential(height, root_up, torso_up)
+    def standing_and_clearance(self, state):
+        """一次 FK、一次接触几何，返回站立质量和 clearance。
 
-    def standing_and_potential(self, state):
-        """一次 FK、一次接触几何，同时返回维持奖励、势函数和 clearance。
-
-        高度进展只由势函数项提供；站立项只负责接近站立后的维持，
-        与真实环境一致，避免重复奖励同一种进展。
+        低位由 geometry 项提供高度进展；接近站立后由门控维持项接管。
+        支撑项用几何接近度代理真实环境的接触力。
         """
         fields, height, root_up, torso_up = self.upright_fields(state)
 
         clearance = self.contact_geometry(state)
-        potential = self.posture_potential(height, root_up, torso_up)
+        geometry_quality = self.geometry_quality(height, root_up, torso_up)
 
         near_standing = (
             (height - 0.48) / (0.60 - 0.48)
@@ -267,12 +251,12 @@ class GetupTask(nn.Module):
             / (math.cos(math.radians(10.0)) - 0.50)
         ).clamp(0.0, 1.0)
 
-        linear_velocity = fields["root_velocity"][:, :3]
-        angular_velocity = fields["root_velocity"][:, 3:6]
+        linear_speed = fields["root_velocity"][:, :3].norm(dim=-1)
+        angular_speed = fields["root_velocity"][:, 3:6].norm(dim=-1)
 
         stability_quality = torch.exp(
-            -linear_velocity.square().sum(dim=-1) / 0.25**2
-            - angular_velocity.square().sum(dim=-1) / 0.60**2
+            -linear_speed.square() / 0.25**2
+            - angular_speed.square() / 0.60**2
         )
 
         proximity = self.contact_proximity(state, clearance)
@@ -281,14 +265,23 @@ class GetupTask(nn.Module):
         hands_clear = (1.0 - proximity[:, 2:4]).prod(dim=-1)
         support_quality = feet_support * hands_clear
 
-        standing_score = stability_quality * support_quality
+        standing_score = (
+            0.65 * stability_quality
+            + 0.35 * support_quality
+        )
 
-        quality = near_standing * upright_gate * standing_score
-        return quality, potential, clearance
+        quality = (
+            0.35 * geometry_quality
+            + 0.65
+            * near_standing
+            * upright_gate
+            * standing_score
+        )
+        return quality, clearance
 
     def standing_quality(self, state):
-        """对外保持原接口；只表示接近站立后的维持质量。"""
-        return self.standing_and_potential(state)[0]
+        """对外保持原接口。"""
+        return self.standing_and_clearance(state)[0]
 
     def reward(
         self,
@@ -359,16 +352,7 @@ class GetupTask(nn.Module):
             joint_acceleration.square().sum(dim=-1)
         )
 
-        standing, potential_after, clearance = self.standing_and_potential(following)
-        potential_before = self.geometry_potential(before)
-
-        # RewardManager 和这里的公共乘 dt 会抵消，使 progress_weight
-        # 直接表示势函数差分系数。注意符号约定：真实环境用 γΦ' − Φ，
-        # 这里是 Φ' − γΦ；当前 progress_gamma=1.0 时两者一致。
-        progress = (
-            potential_after - cfg.progress_gamma * potential_before
-        ) / cfg.step_dt
-
+        standing, clearance = self.standing_and_clearance(following)
         head_contact = self.head_contact_cost(following, clearance)
 
         terms = {
@@ -399,9 +383,6 @@ class GetupTask(nn.Module):
             "head_contact": (
                 -cfg.head_contact_weight
                 * head_contact
-            ),
-            "progress": (
-                cfg.progress_weight * progress
             ),
         }
 

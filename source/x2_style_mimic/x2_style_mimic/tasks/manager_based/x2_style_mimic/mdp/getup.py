@@ -608,12 +608,9 @@ def standing_quality(
     linear_speed = linear_velocity.norm(dim=-1)
     angular_speed = angular_velocity.norm(dim=-1)
 
-    linear_excess = (linear_speed - 0.04).clamp_min(0.0)
-    angular_excess = (angular_speed - 0.15).clamp_min(0.0)
-
     stability_quality = torch.exp(
-        -linear_excess.square() / 0.18**2
-        - angular_excess.square() / 0.32**2
+        -linear_speed.square() / 0.25**2
+        - angular_speed.square() / 0.60**2
     )
     # ---------------------------- 支撑质量指标 ----------------------------
     # 双脚接触不要求左右承重完全相等。
