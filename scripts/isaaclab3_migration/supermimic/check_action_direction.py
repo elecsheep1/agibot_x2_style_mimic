@@ -124,7 +124,19 @@ def run(env,cfg,checkpoint,args):
         repeat=real_trial(env,policy,critic,model,frames,horizon,args.burn_steps,base['actions'])
         start_difference=(base['initial']-repeat['initial']).abs().amax(-1)
         valid=base['valid']&repeat['valid']&(start_difference<1e-4)
-        if not valid.any():raise RuntimeError('没有可重复的真实起点，不能解释动作方向结果')
+        preconditions=dict(base_burn_survivors=int(base['valid'].sum()),repeat_burn_survivors=int(repeat['valid'].sum()),
+            initial_repeat_max_abs_per_env=start_difference.tolist(),
+            initial_repeat_block_max_abs={name:float((base['initial'][:,start:end]-repeat['initial'][:,start:end]).abs().max())
+                for name,start,end in (('root_position',0,3),('root_quaternion',3,7),('joints',7,38),
+                                       ('root_linear_velocity',38,41),('root_angular_velocity',41,44),('joint_velocity',44,75))})
+        if not valid.any():
+            report['horizons'][str(horizon)]=dict(status='起点不可重复，未执行梯度方向判定',preconditions=preconditions)
+            artifacts[horizon]=dict(base={k:v.detach().cpu() for k,v in base.items()},
+                                   repeat={k:v.detach().cpu() for k,v in repeat.items()})
+            (args.output/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2))
+            torch.save(artifacts,args.output/'paired_trials.pt')
+            print(f'[回放检查 H={horizon}] '+json.dumps(preconditions,ensure_ascii=False),flush=True)
+            continue
         actions=base['actions'].detach().clone().requires_grad_()
         predicted=imagined_objectives(model,critic,lib,base['initial'],actions,base['previous'],
                                      base['context'],base['frames'],cfg.policy_trainer.future_frames)
@@ -161,6 +173,7 @@ def run(env,cfg,checkpoint,args):
                     predicted_minus={k:v.detach().cpu() for k,v in predictions[-1].items()}))
                 print(f'[方向检查 H={horizon} {name} eps={epsilon}] '+json.dumps(comparisons['task'],ensure_ascii=False),flush=True)
         report['horizons'][str(horizon)]=dict(valid_windows=int(valid.sum()),
+            preconditions=preconditions,
             baseline_survivor_count=int((valid&base['alive_at_end']&repeat['alive_at_end']).sum()),
             baseline_initial_state_repeat_max_abs=float(start_difference.max()),results=results)
         artifacts[horizon]=dict(base={k:v.detach().cpu() for k,v in base.items()},
