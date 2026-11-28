@@ -53,6 +53,26 @@ def _install_launcher_compat():
     return getup_runtime
 
 
+def _prime_runner_from_current_environment(runner) -> None:
+    """Initialize a runner history without issuing a second ``env.reset()``.
+
+    ``build_runtime`` already resets the freshly-created environment.  The
+    legacy runner's ``reset`` method unconditionally resets it again.  On the
+    Isaac Lab 3/PhysX migration path, that redundant manual reset can make Kit
+    close cleanly before Python gets a chance to report an exception.  For a
+    read-only audit we only need a valid initial world-state history, which is
+    exactly what the first reset has already provided.
+    """
+    import torch
+
+    current = runner.env.read_world_state().to(runner.device)
+    runner.history = current[:, None].expand(-1, runner.history_length, -1).clone()
+    runner._read_commands()
+    # Be explicit: the audit must not inherit an old replay timeline.
+    runner.replay.total_steps = 0
+    print("[想象诊断] 已复用环境初始化状态（不执行重复 env.reset）", flush=True)
+
+
 def main() -> None:
     sys.path.insert(0, str(HERE))
     sys.path.insert(0, str(SUPERMIMIC_SCRIPTS))
@@ -103,9 +123,11 @@ def main() -> None:
                 if world_hook is not None:
                     trainer.world_model.update_normalization = lambda *args, **kwargs: None
                 trainer.proprioception.update_normalization = lambda *args, **kwargs: None
-                runner.reset()
-                replay.total_steps = 0
+                print("[想象诊断] 正在初始化采样历史", flush=True)
+                _prime_runner_from_current_environment(runner)
+                print("[想象诊断] 正在采集真实物理轨迹", flush=True)
                 collection = runner.collect(collected)
+                print("[想象诊断] 真实轨迹采集完成，正在计算想象对照", flush=True)
             finally:
                 if world_hook is not None:
                     trainer.world_model.update_normalization = world_hook
