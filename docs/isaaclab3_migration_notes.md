@@ -67,7 +67,24 @@ if isinstance(env_ids, slice):
 
 不应先用 4096 环境排查 API 迁移错误。确认单步通过后，再按照显存和 batch 配置扩容。
 
-## 7. 当前项目入口
+## 7. RSL-RL 配置版本差异
+
+本项目旧 RSL-RL 配置中出现过 `init_noise_std`、`noise_std_type` 等模型参数。Isaac Lab 3 配套的 RSL-RL `MLPModel` 构造函数不再接受这些键，直接复用旧配置会在 Runner 创建阶段报 `unexpected keyword argument`。迁移入口应在构造 Runner 前按当前安装版本的模型构造函数签名过滤旧键；不要为了消除报错而随意降级/升级整套 PyTorch 或 RSL-RL。
+
+同理，旧脚本的 `scripts/rsl_rl/train.py` 依赖已删除的 task utility。X2 多动作训练应通过 `scripts/isaaclab3_migration/train_x2_rsl_rl.py` 启动。
+
+## 8. CLI 与可视化
+
+Lab 3 的 `add_launcher_args()` 已注册 `--visualizer/--viz`。迁移脚本不要再次手工添加 `--viz`，否则 `argparse` 会报 option string conflict。无渲染训练使用 `--viz none`；需要 Kit 窗口调试时使用 `--viz kit`。训练入口和诊断入口都应只注册一次 launcher 参数。
+
+## 9. 外部资源与远程机器
+
+- URDF、motion manifest、USD 以及 Git LFS 资产必须在新机器上真实存在；不要保留旧机器的绝对路径（例如 `/home/panda/...`）。迁移入口可提供新机器的标准路径作为默认值，但 CLI 的 `--urdf` 应始终可覆盖。
+- Isaac Lab 远程 USD 资源可被缓存到 `/tmp`。`Serving remote assets from the local cache` 是提示而不是错误；首次运行或校验远端资源时会更慢。
+- Git/PyPI 下载失败（HTTP2、连接超时）不代表 Python 依赖定义错误。重试能复用已下载的 wheel/包，但 Git 依赖克隆必须网络可达。
+- 在两台机器运行同一实验时，应同步 Git commit、Git LFS、URDF/运动数据，以及 Conda/Python、Isaac Lab、Isaac Sim、驱动版本；只同步 Python 源码不足以保证可复现。
+
+## 10. 当前项目入口
 
 | 工作流 | 使用入口 |
 | --- | --- |
@@ -78,7 +95,7 @@ if isinstance(env_ids, slice):
 
 原始 `scripts/rsl_rl/`、`scripts/supermimic/` 与 `scripts/supermimic_tracking/` 文件不作为新机器的 Isaac Lab 3 启动入口。
 
-## 8. 常见非根因日志
+## 11. 常见非根因日志
 
 - `env_cfg.viewer is deprecated`：配置迁移提示，不会导致训练退出。
 - 远程资产从 `/tmp` cache 加载：首次会校验远端，通常不影响正确性。
