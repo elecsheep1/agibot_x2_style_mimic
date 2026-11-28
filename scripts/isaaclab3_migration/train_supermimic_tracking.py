@@ -15,7 +15,6 @@ import json
 import signal
 import sys
 import traceback
-from contextlib import contextmanager
 from pathlib import Path
 import tomllib
 
@@ -29,34 +28,6 @@ DEFAULT_URDF = (
 )
 
 
-@contextmanager
-def _launch_simulation_compat(_env_cfg, args_cli):
-    """Replacement for Isaac Lab 2's removed ``launch_simulation`` helper."""
-    from isaaclab.app import AppLauncher
-
-    app_launcher = AppLauncher(args_cli)
-    previous_sigint_handler = signal.getsignal(signal.SIGINT)
-
-    def report_sigint(_signum, frame):
-        print("\n[interrupt] Received SIGINT after Kit launch; Python was executing:", file=sys.stderr)
-        traceback.print_stack(frame, file=sys.stderr)
-        raise KeyboardInterrupt
-
-    signal.signal(signal.SIGINT, report_sigint)
-    try:
-        yield
-    finally:
-        try:
-            app_launcher.app.close()
-        finally:
-            signal.signal(signal.SIGINT, previous_sigint_handler)
-
-
-def _setup_preset_cli_compat(parser):
-    """Tracking owns its TOML config; do not apply unrelated task presets."""
-    return parser.parse_known_args()
-
-
 def _load_legacy_entrypoint():
     spec = importlib.util.spec_from_file_location("x2_legacy_supermimic_tracking_train", TRACKING_ENTRYPOINT)
     if spec is None or spec.loader is None:
@@ -68,7 +39,7 @@ def _load_legacy_entrypoint():
 
 def _parse_config(legacy):
     """Parse the legacy CLI without invoking its obsolete launcher entrypoint."""
-    from isaaclab.app import AppLauncher
+    from isaaclab.app import add_launcher_args
 
     parser = argparse.ArgumentParser(description="SuperMimic Tracking (Isaac Lab 3 migration)")
     parser.add_argument("--config", type=Path, default=PROJECT_ROOT / "scripts/supermimic_tracking/configs/train.toml")
@@ -80,7 +51,7 @@ def _parse_config(legacy):
     parser.add_argument("--motion-manifest", type=Path)
     parser.add_argument("--urdf", type=Path)
     parser.add_argument("--print-config", action="store_true")
-    AppLauncher.add_app_launcher_args(parser)
+    add_launcher_args(parser)
     args, unknown = parser.parse_known_args()
     if unknown:
         parser.error(str(unknown))
@@ -120,15 +91,6 @@ def main() -> None:
         raise FileNotFoundError(TRACKING_ENTRYPOINT)
 
     _supply_remote_urdf(sys.argv)
-
-    # The original module imports these from an Isaac Lab 2 location inside
-    # ``main``.  Patch that public module before dispatching to it.
-    from isaaclab.app import AppLauncher
-    import isaaclab_tasks.utils as task_utils
-
-    task_utils.add_launcher_args = AppLauncher.add_app_launcher_args
-    task_utils.setup_preset_cli = _setup_preset_cli_compat
-    task_utils.launch_simulation = _launch_simulation_compat
 
     previous_sigint_handler = signal.getsignal(signal.SIGINT)
 
@@ -181,8 +143,14 @@ def main() -> None:
         # Arguments have been fully parsed.  Prevent Kit from parsing this
         # training CLI a second time during startup.
         sys.argv = [sys.argv[0]]
-        print("[compat] Starting Isaac Lab 3 simulation", flush=True)
-        with _launch_simulation_compat(env_cfg, args):
+        # Isaac Lab 3 chooses and owns the simulator lifecycle from the
+        # backend configuration.  Do not recreate the retired Lab 2
+        # ``AppLauncher`` wrapper here: it can shut Kit down before the
+        # standalone workflow reaches its environment construction.
+        from isaaclab.app import launch_simulation
+
+        print("[compat] Starting official Isaac Lab 3 simulation lifecycle", flush=True)
+        with launch_simulation(env_cfg, args):
             print("[compat] Kit started; importing Tracking environment", flush=True)
             import random
             import numpy as np
