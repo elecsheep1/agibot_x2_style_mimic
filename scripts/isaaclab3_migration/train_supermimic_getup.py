@@ -26,10 +26,24 @@ def _launch_simulation_compat(_env_cfg, args_cli):
     from isaaclab.app import AppLauncher
 
     app_launcher = AppLauncher(args_cli)
+    previous_sigint_handler = signal.getsignal(signal.SIGINT)
+
+    def report_sigint(_signum, frame):
+        # Kit can replace signal handlers while launching.  Reinstall ours
+        # after AppLauncher has created SimulationApp so remote interrupts are
+        # visible instead of becoming an unexplained exit status 130.
+        print("\n[interrupt] Received SIGINT after Kit launch; Python was executing:", file=sys.stderr)
+        traceback.print_stack(frame, file=sys.stderr)
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGINT, report_sigint)
     try:
         yield
     finally:
-        app_launcher.app.close()
+        try:
+            app_launcher.app.close()
+        finally:
+            signal.signal(signal.SIGINT, previous_sigint_handler)
 
 
 def _setup_preset_cli_compat(parser):
