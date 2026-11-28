@@ -64,10 +64,6 @@ def main() -> None:
     from isaaclab_tasks.utils import add_launcher_args, launch_simulation, setup_preset_cli
 
     from getup_config import parse_config
-    from x2_style_mimic.algorithms.supermimic.rollout import imagine
-    from x2_style_mimic.algorithms.supermimic.state import unpack_state
-    from x2_style_mimic.algorithms.supermimic.world_model import rollout_logged_actions
-
     audit = _load_original_audit_module()
 
     cfg, launcher = parse_config(launcher_hooks=(add_launcher_args, setup_preset_cli))
@@ -79,7 +75,15 @@ def main() -> None:
 
     env_cfg = getup_runtime.training_env_cfg(cfg)
     with launch_simulation(env_cfg, launcher):
+        # Keep every task/algorithm import below Kit launch.  Importing them
+        # earlier can preload pxr/USD and break Isaac Sim 6.2 on the remote host.
+        from x2_style_mimic.algorithms.supermimic.rollout import imagine
+        from x2_style_mimic.algorithms.supermimic.state import unpack_state
+        from x2_style_mimic.algorithms.supermimic.world_model import rollout_logged_actions
+
         with getup_runtime.training_environment(cfg, env_cfg) as (env, checkpoint):
+            if checkpoint is None:
+                raise RuntimeError("审计入口未能读取 --resume 指定的检查点")
             runtime = getup_runtime.build_runtime(env, cfg, checkpoint)
             cfg.output.mkdir(parents=True, exist_ok=False)
 
@@ -91,6 +95,7 @@ def main() -> None:
             if collected > replay.capacity:
                 raise ValueError(f"回放容量 {replay.capacity} 不足以采集 {collected} 步")
 
+            print(f"[想象诊断] 使用 {env.num_envs} 环境，采集 {collected} 步", flush=True)
             runner.action_noise_std = 0.0
             world_hook = getattr(trainer.world_model, "update_normalization", None)
             proprio_hook = trainer.proprioception.update_normalization
@@ -178,6 +183,6 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
-    except Exception:
+    except BaseException:
         traceback.print_exc()
         raise
