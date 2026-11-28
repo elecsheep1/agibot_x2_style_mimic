@@ -9,6 +9,7 @@ already uses.  The original audit script in ``scripts/checks`` is untouched.
 from __future__ import annotations
 
 import json
+import importlib.util
 import sys
 import traceback
 from pathlib import Path
@@ -18,6 +19,17 @@ HERE = Path(__file__).resolve().parent
 PROJECT_ROOT = HERE.parents[1]
 SUPERMIMIC_SCRIPTS = PROJECT_ROOT / "scripts" / "supermimic"
 CHECKS = PROJECT_ROOT / "scripts" / "checks"
+
+
+def _load_original_audit_module():
+    """Load the original audit helpers without importing this launcher again."""
+    module_path = CHECKS / "audit_getup_imagination.py"
+    spec = importlib.util.spec_from_file_location("x2_original_imagination_audit", module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Unable to load audit helpers: {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _install_launcher_compat():
@@ -56,7 +68,7 @@ def main() -> None:
     from x2_style_mimic.algorithms.supermimic.state import unpack_state
     from x2_style_mimic.algorithms.supermimic.world_model import rollout_logged_actions
 
-    import audit_getup_imagination as audit
+    audit = _load_original_audit_module()
 
     cfg, launcher = parse_config(launcher_hooks=(add_launcher_args, setup_preset_cli))
     cfg.validate()
