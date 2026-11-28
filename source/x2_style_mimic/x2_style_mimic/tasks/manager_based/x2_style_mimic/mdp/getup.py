@@ -748,6 +748,39 @@ def out_of_bounds_failure(env):
         / env.step_dt
     )
 
+def stable_hold_reward(env, required_hold: float):
+    if not math.isfinite(required_hold) or required_hold <= 0.0:
+        raise ValueError("required_hold 必须为正有限数")
+
+    snapshot = getattr(env, "_getup_progress_snapshot", None)
+    if snapshot is None:
+        return torch.zeros(env.num_envs, device=env.device)
+
+    progress = (
+        snapshot["hold_seconds"] / required_hold
+    ).clamp(0.0, 1.0)
+
+    return snapshot["succeeded"].float() * progress
+
+def stable_end_bonus(env, required_hold: float):
+    if not math.isfinite(required_hold) or required_hold <= 0.0:
+        raise ValueError("required_hold 必须为正有限数")
+
+    snapshot = getattr(env, "_getup_progress_snapshot", None)
+    if snapshot is None:
+        return torch.zeros(env.num_envs, device=env.device)
+
+    completed = (
+        env.termination_manager.time_outs
+        & ~env.termination_manager.terminated
+    )
+    stable = (
+        snapshot["hold_seconds"] + 1e-6 >= required_hold
+    )
+
+    return (completed & stable).float() / env.step_dt
+
+
 # 扰动
 def perturb_standing_velocity(
     env,

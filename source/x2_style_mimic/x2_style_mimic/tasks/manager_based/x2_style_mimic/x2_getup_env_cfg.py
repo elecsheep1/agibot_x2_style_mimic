@@ -314,9 +314,21 @@ class GetUpRewardsCfg:
         },
     )
 
+    stable_hold = RewTerm(
+        func=getup_mdp.stable_hold_reward,
+        weight=0.0,
+        params={"required_hold": 3.0},
+    )
+
+    stable_end = RewTerm(
+        func=getup_mdp.stable_end_bonus,
+        weight=15.0,
+        params={"required_hold": 3.0},
+    )
+
     success_bonus = RewTerm(
         func=getup_mdp.GetUpSuccessBonus,
-        weight=30.0,
+        weight=12.0,
     )
 
     head_contact = RewTerm(

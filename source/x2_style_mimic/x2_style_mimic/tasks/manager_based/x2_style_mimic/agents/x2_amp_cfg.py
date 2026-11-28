@@ -50,12 +50,12 @@ class MultiMotionAMPAlgorithmCfg(RslRlPpoAlgorithmCfg):
         "policy_sample_gate_enabled": True,
 
         "learning_rate": 5e-5,
-        "gradient_penalty": 15.0,
+        "gradient_penalty": 10.0,
         "trunk_weight_decay": 1.0e-3,
         "head_weight_decay": 1.0e-1,
         "normalization_clip": 10.0,
 
-        "buffer_capacity": 500_000,
+        "buffer_capacity": 100_000,
         "updates_per_iteration": 20,
         "batch_size": 4096,
         # 按本轮实际入池比例缩减判别器更新次数。
