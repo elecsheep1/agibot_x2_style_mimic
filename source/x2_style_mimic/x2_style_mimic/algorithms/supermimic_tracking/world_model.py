@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -20,6 +22,16 @@ class WorldModelCfg:
     term_hidden: tuple[int, ...] = (64, 64)
     state_spec: StateSpecCfg = field(default_factory=StateSpecCfg)
     term_loss_weight: float = 1.0
+    # 顺序：根位置、根旋转、根线速度、根角速度、关节位置、关节速度。
+    # 默认全为 1，保持原有损失定义。
+    state_loss_weights: tuple[float, ...] = (
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+    )
     height_threshold: float = 0.25
     tilt_threshold: float = 0.8
 
@@ -38,15 +50,65 @@ class TerminationHead(nn.Module):
         return self.mlp(torch.cat([x, x.abs()], dim=-1)).squeeze(-1)
 
 
+STATE_ERROR_BLOCKS = (
+    ("root_position", 0, 3),
+    ("root_rotation", 3, 6),
+    ("root_linear_velocity", 6, 9),
+    ("root_angular_velocity", 9, 12),
+    ("joint_position", 12, 43),
+    ("joint_velocity", 43, 74),
+)
+
+
 class WorldModel(nn.Module):
     def __init__(self, cfg: WorldModelCfg, heads: AnalyticHeads, device):
         super().__init__()
+
+        weights = tuple(cfg.state_loss_weights)
+
+        if len(weights) != len(STATE_ERROR_BLOCKS):
+            raise ValueError(
+                "状态损失权重必须包含 6 项"
+            )
+
+        if any(
+            not math.isfinite(value) or value < 0.0
+            for value in weights
+        ):
+            raise ValueError(
+                "状态损失权重必须为非负有限数"
+            )
+
+        if not any(value > 0.0 for value in weights):
+            raise ValueError(
+                "状态损失权重不能全部为零"
+            )
+
         self.cfg = cfg
         self.spec = StateSpec(cfg.state_spec, device)
         self.dynamics = DynamicsMLP(hidden=cfg.hidden)
         self.term_head = TerminationHead(cfg.term_hidden, cfg.height_threshold, cfg.tilt_threshold)
         self.heads = heads  # analytic observation / reward / FK (no parameters)
         self.to(device)
+
+    def state_prediction_loss(
+        self,
+        squared_error: torch.Tensor,
+    ) -> torch.Tensor:
+        """输入归一化逐维平方误差，输出每个样本的加权状态损失。"""
+        block_sums = torch.stack(
+            [
+                squared_error[..., start:end].sum(dim=-1)
+                for _, start, end in STATE_ERROR_BLOCKS
+            ],
+            dim=-1,
+        )
+
+        weights = squared_error.new_tensor(
+            self.cfg.state_loss_weights
+        )
+
+        return (block_sums * weights).sum(dim=-1)
 
     # ------------------------------------------------------------------ one step
 
@@ -146,13 +208,50 @@ class WorldModel(nn.Module):
         term_logits = []
         term_labels = []
 
+        block_totals = {}
         acc_num = 0.0
         step_fn = getattr(self, "_loss_step_fn", None) or self._loss_step
         for j in range(k):
             s, sq, bce, logits = step_fn(s, a_exec[j], xi, states[j + 1], done[j], refs[j].root_pos_w, refs[j].root_quat_w)
-            total_state = total_state + sq.sum(-1).mean()
+            total_state = (
+                total_state
+                + self.state_prediction_loss(sq).mean()
+            )
             total_term = total_term + bce.mean()
             with torch.no_grad():
+                for block_index, (
+                    name,
+                    start,
+                    end,
+                ) in enumerate(STATE_ERROR_BLOCKS):
+                    block = sq[..., start:end]
+
+                    # 每维平均误差，便于不同维数的分块横向比较。
+                    block_mean = block.mean().detach()
+
+                    # 此分块对实际训练损失的贡献。
+                    weighted_sum = (
+                        block.sum(dim=-1).mean()
+                        * self.cfg.state_loss_weights[block_index]
+                    ).detach()
+
+                    if name not in block_totals:
+                        block_totals[name] = weighted_sum
+                    else:
+                        block_totals[name] = (
+                            block_totals[name] + weighted_sum
+                        )
+
+                    if j == 0:
+                        metrics[f"state_nse_first/{name}"] = (
+                            block_mean
+                        )
+
+                    if j == k - 1:
+                        metrics[f"state_nse_last/{name}"] = (
+                            block_mean
+                        )
+
                 nse = sq.mean(-1).mean()
                 if j == 0:
                     err_first = nse
@@ -165,6 +264,11 @@ class WorldModel(nn.Module):
                 term_labels.append(
                     done[j].detach()
                 )
+
+        for name, total in block_totals.items():
+            metrics[f"state_loss_block/{name}"] = (
+                total / k
+            )
 
         loss = total_state / k + self.cfg.term_loss_weight * total_term / k
         # Metrics stay on-device (detached tensors): a float() here would stall the CPU on the

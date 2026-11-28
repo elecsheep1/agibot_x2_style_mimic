@@ -58,6 +58,21 @@ def main():
     parser.add_argument('--device',default='cuda:0')
     parser.add_argument('--scratch',action='store_true',help='仅动力学从头拟合，失败头继续冻结')
     parser.add_argument('--hidden',type=int,nargs='+',help='从头拟合时的隐藏层宽度')
+    parser.add_argument(
+        "--state-loss-weights",
+        type=float,
+        nargs=6,
+        default=None,
+        metavar=(
+            "ROOT_POS",
+            "ROOT_ROT",
+            "ROOT_LINEAR",
+            "ROOT_ANGULAR",
+            "JOINT_POS",
+            "JOINT_VEL",
+        ),
+        help="覆盖六个状态误差分块的训练权重",
+    )
     args=parser.parse_args()
     if min(args.updates,args.batch_size,args.windows)<1 or args.lr<=0:
         parser.error('更新次数、批量、窗口数量和学习率必须为正数')
@@ -71,6 +86,10 @@ def main():
     groups,ids=split_data(data,args.seed)
     cfg=WorldModelCfg()
     load_file('_fixed_refit_cfg',PROJECT/'scripts/supermimic_tracking/train.py').update_config(cfg,checkpoint['config']['world_model'])
+    if args.state_loss_weights is not None:
+        cfg.state_loss_weights = tuple(
+            args.state_loss_weights
+        )
     # 使用保存配置中的训练转移数，不改变原有窗口口径。
     horizons=[int(checkpoint['config']['wm_trainer']['window'])]
     if not horizons or min(horizons)<1:raise ValueError('检查点训练窗口配置无效')
@@ -90,6 +109,9 @@ def main():
     report=dict(checkpoint=str(args.checkpoint),data=str(args.data),data_check=checked,environment_groups=ids,
         transitions=horizons,window_frames=[h+1 for h in horizons],lr=args.lr,seed=args.seed,
         initialization='scratch' if args.scratch else 'checkpoint',hidden=list(cfg.hidden),
+        state_loss_weights=list(
+            cfg.state_loss_weights
+        ),
         dynamics_parameters=sum(p.numel() for p in model.dynamics.parameters()),
         fixed_cohorts={name:dict(starts=c['starts'].cpu().tolist(),envs=c['envs'].cpu().tolist()) for name,c in cohorts.items()},
         notes=['只更新 dynamics，使用原有归一化状态误差损失；优化器重新初始化。',
@@ -97,11 +119,46 @@ def main():
                '仅按验证集 8 步误差选择模型，测试集不参与选择。'],history=[])
     args.output.mkdir(parents=True,exist_ok=True)
     report['before']={name:evaluate(name) for name in cohorts}
-    def score(metrics):
-        # 与原预热相同，以归一化状态平方误差选模型。
-        c=cohorts['validation'];pred=variant_rollout(model,c,'baseline')
-        return float(model.spec.normalized_sq_error(pred[:,7],c['following'][:,7]).mean())
-    best=score(None);best_update=0;best_state=copy.deepcopy(model.state_dict())
+    @torch.no_grad()
+    def selection_scores():
+        cohort = cohorts["validation"]
+
+        prediction = variant_rollout(
+            model,
+            cohort,
+            "baseline",
+        )
+
+        errors = {
+            horizon: float(
+                model.spec.normalized_sq_error(
+                    prediction[:, horizon - 1],
+                    cohort["following"][:, horizon - 1],
+                ).mean()
+            )
+            for horizon in (8, 16, 32)
+        }
+
+        return {
+            "8step": errors[8],
+            "long_rollout": (
+                errors[8]
+                + errors[16]
+                + errors[32]
+            ) / 3.0,
+        }
+
+
+    best_models = {
+        name: {
+            "score": value,
+            "update": 0,
+            "state": copy.deepcopy(
+                model.state_dict()
+            ),
+        }
+        for name, value in selection_scores().items()
+    }
     generator=torch.Generator().manual_seed(args.seed)
     schedule=sorted(set([v for v in args.checkpoints if 0<v<=args.updates]+[args.updates]))
     for update in range(1,args.updates+1):
@@ -112,29 +169,134 @@ def main():
             subtotal=0.
             for step in range(h):
                 s=model.step(s,actions[:,step],context)
-                subtotal=subtotal+model.spec.error_vector(s,true[:,step]).square().sum(-1).mean()
+                squared_error = model.spec.error_vector(
+                    s,
+                    true[:, step],
+                ).square()
+
+                subtotal = (
+                    subtotal
+                    + model.state_prediction_loss(
+                        squared_error
+                    ).mean()
+                )
             loss=loss+subtotal/h/len(horizons)
         if not torch.isfinite(loss):raise RuntimeError('动力学损失出现非有限值')
         optimizer.zero_grad();loss.backward()
         torch.nn.utils.clip_grad_norm_(model.dynamics.parameters(),1.,error_if_nonfinite=True)
         optimizer.step()
         if update in schedule:
-            metrics=evaluate('validation');value=score(metrics)
-            report['history'].append(dict(update=update,loss=float(loss.detach()),validation=metrics,selection_error=value))
-            if value<best:best,best_update,best_state=value,update,copy.deepcopy(model.state_dict())
-            print(f'[固定补训 {update}] 损失={float(loss.detach()):.4f}，验证8步={metrics["8"]["root_position_m"]["mean"]:.4f}m，32步={metrics["32"]["root_position_m"]["mean"]:.4f}m',flush=True)
-    report['last']={name:evaluate(name) for name in cohorts}
-    model.load_state_dict(best_state)
-    report['selected_update']=best_update
-    report['after']={name:evaluate(name) for name in cohorts}
-    if not all(torch.equal(v,model.term_head.state_dict()[k]) for k,v in head_before.items()):
-        raise RuntimeError('失败头意外发生变化')
-    # 独立诊断产物，不能误当成可直接续训的完整检查点。
+            metrics = evaluate("validation")
+            scores = selection_scores()
+
+            report["history"].append(
+                {
+                    "update": update,
+                    "loss": float(loss.detach()),
+                    "validation": metrics,
+                    "selection_scores": scores,
+                }
+            )
+
+            for name, value in scores.items():
+                if value < best_models[name]["score"]:
+                    best_models[name] = {
+                        "score": value,
+                        "update": update,
+                        "state": copy.deepcopy(
+                            model.state_dict()
+                        ),
+                    }
+
+            position_8 = metrics["8"][
+                "root_position_m"
+            ]["mean"]
+
+            position_32 = metrics["32"][
+                "root_position_m"
+            ]["mean"]
+
+            print(
+                f"[固定补训 {update}] "
+                f"损失={float(loss.detach()):.4f}，"
+                f"验证8步={position_8:.4f}m，"
+                f"32步={position_32:.4f}m",
+                flush=True,
+            )
     from dataclasses import asdict
-    torch.save(dict(kind='fixed_dynamics_refit_v1',world={k:v.cpu() for k,v in best_state.items()},
-                    world_config=asdict(cfg),source=str(args.checkpoint)),args.output/'dynamics_refit.pt')
-    (args.output/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2))
-    print('[完成] 策略与价值网络未加载、未更新；失败头保持不变',flush=True)
+
+    report["last"] = {
+        name: evaluate(name)
+        for name in cohorts
+    }
+
+    report["selected"] = {}
+
+    for selection_name, selected in best_models.items():
+        model.load_state_dict(
+            selected["state"],
+            strict=True,
+        )
+
+        if not all(
+            torch.equal(
+                value,
+                model.term_head.state_dict()[key],
+            )
+            for key, value in head_before.items()
+        ):
+            raise RuntimeError(
+                "失败头意外发生变化"
+            )
+
+        report["selected"][selection_name] = {
+            "update": selected["update"],
+            "score": selected["score"],
+            "metrics": {
+                name: evaluate(name)
+                for name in cohorts
+            },
+        }
+
+        torch.save(
+            {
+                "kind": "fixed_dynamics_refit_v1",
+                "world": {
+                    key: value.detach().cpu()
+                    for key, value
+                    in selected["state"].items()
+                },
+                "world_config": asdict(cfg),
+                "source": str(args.checkpoint),
+                "selection": selection_name,
+                "selected_update": selected["update"],
+            },
+            args.output
+            / f"dynamics_best_{selection_name}.pt",
+        )
+
+    report["notes"] = [
+        "仅更新动力学，策略与价值网络未加载。",
+        "失败头保持冻结。",
+        "固定窗口起点唯一，同一回合内窗口可能重叠。",
+        "分别按验证集8步误差与8/16/32步平均误差选择模型。",
+        "选择指标不使用训练分块权重。",
+        "测试集不参与模型选择。",
+    ]
+
+    (args.output / "report.json").write_text(
+        json.dumps(
+            report,
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+    print(
+        "[完成] 已分别保存短期与长时最优模型；"
+        "策略、价值网络和失败头未更新",
+        flush=True,
+    )
 
 
 if __name__=='__main__':main()
