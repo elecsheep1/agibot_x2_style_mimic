@@ -5,6 +5,7 @@
 next noise-free observation into one call so ``torch.compile`` can fuse the hundreds of
 small kernels of the per-body FK loop. Reference quantities are passed as plain tensors
 (already gathered from the motion library) so the compiled graph has static shapes.
+用世界模型预测下一状态，并同时计算下一步的奖励、终止概率、无噪声观测和锚点位姿，供训练器一次性使用。
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import torch
 from .heads import ReferenceFrame, analytic_observation
 from .world_model import WorldModel
 
+# 定义 8 个 reward 项的固定顺序
 REWARD_TERM_NAMES = (
     "motion_global_root_pos",
     "motion_global_root_ori",
@@ -37,13 +39,20 @@ class ImagStep:
             self._fn = torch.compile(self._step, mode=mode, dynamic=False)
 
     def _step(self, s, a, a_prev, xi, ref_body_pos, ref_body_quat, ref_body_lin, ref_body_ang, ref_root_pos, ref_root_quat):
+        # 构造参考帧
         ref = ReferenceFrame(ref_body_pos, ref_body_quat, ref_body_lin, ref_body_ang, ref_root_pos, ref_root_quat)
+        # 世界模型预测下一状态
         s_next = self.wm.step(s, a, xi)
+        # 通过 FK 计算身体状态
         bodies = self.wm.heads.robot_bodies(s_next)
+        # 计算奖励
         terms = self.wm.heads.reward(s_next, a, a_prev, ref, bodies)
         r = terms["total"]
+        # 组装 reward 向量，顺序固定
         term_vec = torch.stack([terms[k] for k in REWARD_TERM_NAMES], dim=0)  # (8, n)
+        # 计算终止 logits
         logits = self.wm.termination_logits(s_next, ref)
+        # 计算无噪声观测和锚点位姿
         obs_clean = analytic_observation(s_next, a, xi, self.q0, self.control_ids)
         ai = self.wm.heads.anchor_index
         anchor_pose = torch.cat([bodies["pos"][..., ai, :], bodies["quat"][..., ai, :]], dim=-1)  # (n, 7)

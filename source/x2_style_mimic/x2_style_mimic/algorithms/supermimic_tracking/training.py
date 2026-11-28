@@ -37,6 +37,67 @@ class TrackingTraining:
         if abs(env.step_dt-cfg.world_model.state_spec.dt) > 1e-8:
             raise ValueError('世界模型积分周期与真实控制周期不一致')
         self.world = WorldModel(cfg.world_model,self.command.heads,env.device)
+
+        action_term = env.action_manager.get_term(
+            "joint_pos"
+        )
+
+        shape = action_term.raw_actions.shape
+
+        scale = torch.broadcast_to(
+            torch.as_tensor(
+                action_term._scale,
+                dtype=torch.float32,
+                device=env.device,
+            ),
+            shape,
+        )
+
+        offset = torch.broadcast_to(
+            torch.as_tensor(
+                action_term._offset,
+                dtype=torch.float32,
+                device=env.device,
+            ),
+            shape,
+        )
+
+        if bool((scale <= 0).any()):
+            raise ValueError(
+                "当前动作边界换算要求 scale 为正数"
+            )
+
+        lower = (
+            action_term.target_lower - offset
+        ) / scale
+
+        upper = (
+            action_term.target_upper - offset
+        ) / scale
+
+        # 一个策略共享一套动作边界；
+        # 不允许静默忽略环境之间不同的动作标定。
+        if (
+            not torch.allclose(
+                lower,
+                lower[:1].expand_as(lower),
+            )
+            or not torch.allclose(
+                upper,
+                upper[:1].expand_as(upper),
+            )
+        ):
+            raise ValueError(
+                "不同环境的动作边界不一致"
+            )
+
+        cfg.policy.action_lower = tuple(
+            lower[0].cpu().tolist()
+        )
+        cfg.policy.action_upper = tuple(
+            upper[0].cpu().tolist()
+        )
+
         self.policy = Policy(cfg.policy).to(env.device)
         self.critic = Critic(cfg.critic,pcfg=cfg.policy).to(env.device)
         self.world_trainer = WorldModelTrainer(self.world,self.lib,cfg.wm_trainer)

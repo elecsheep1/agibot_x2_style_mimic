@@ -29,6 +29,9 @@ class PolicyCfg:
     decoder_last_gain: float = 0.01
     goal_dim: int = GOAL_DIM  # 720 (+9 with anchor_obs)
 
+    action_lower: tuple[float, ...] | None = None
+    action_upper: tuple[float, ...] | None = None
+
 
 @dataclass
 class CriticCfg:
@@ -65,9 +68,56 @@ class Decoder(nn.Module):
         super().__init__()
         self.mlp = MLP(cfg.latent_dim + (obs_dim or cfg.history*93), cfg.decoder_hidden, ACT_DIM, last_gain=cfg.decoder_last_gain)
         self.register_buffer("scale", _obs_scale_vector(cfg))
+        if (
+            cfg.action_lower is None
+            or cfg.action_upper is None
+        ):
+            raise ValueError("创建策略前必须根据真实动作接口设置动作边界")
+        lower = torch.tensor(
+            cfg.action_lower,
+            dtype=torch.float32,
+        )
+        upper = torch.tensor(
+            cfg.action_upper,
+            dtype=torch.float32,
+        )
 
-    def forward(self, z: torch.Tensor, obs_hist: torch.Tensor) -> torch.Tensor:
-        return self.mlp(torch.cat([z, obs_hist * self.scale], dim=-1))
+        if (
+            lower.shape != (ACT_DIM,)
+            or upper.shape != (ACT_DIM,)
+            or not bool(torch.isfinite(lower).all())
+            or not bool(torch.isfinite(upper).all())
+            or bool((lower >= 0).any())
+            or bool((upper <= 0).any())
+        ):
+            raise ValueError("动作边界必须有限、维度正确，且每个关节均包含零动作")
+
+        self.register_buffer(
+            "action_lower",
+            lower,
+        )
+        self.register_buffer(
+            "action_upper",
+            upper,
+        )
+
+    # def forward(self, z: torch.Tensor, obs_hist: torch.Tensor) -> torch.Tensor:
+    #     return self.mlp(torch.cat([z, obs_hist * self.scale], dim=-1))
+    def forward(self, z, obs_hist):
+        inputs = torch.cat(
+            [z, obs_hist * self.scale],
+            dim=-1,
+        )
+        raw = self.mlp(inputs)
+
+        # 正负方向分别使用对应关节的允许幅度。
+        span = torch.where(
+            raw >= 0,
+            self.action_upper,
+            -self.action_lower,
+        )
+
+        return span * torch.tanh(raw / span)
 
 
 class Policy(nn.Module):

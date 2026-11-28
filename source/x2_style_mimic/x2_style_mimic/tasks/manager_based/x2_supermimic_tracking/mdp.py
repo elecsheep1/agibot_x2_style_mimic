@@ -22,13 +22,70 @@ class NoisyJointPositionAction(JointPositionAction):
         self.executed_raw = self.raw_actions.clone()
         self.last_executed = self.executed_raw.clone()
 
-    def process_actions(self, actions):
-        self._raw_actions.copy_(actions)
-        self.executed_raw = actions + self.cfg.noise_std * torch.randn_like(actions)
-        self.last_executed.copy_(self.executed_raw)
-        self._processed_actions = self.executed_raw * self._scale + self._offset
+        robot = env.scene[cfg.asset_name]
+        limits = tensor(
+            robot.data.joint_pos_limits
+        )[:, self._joint_ids]
+
+        self.target_lower = limits[..., 0].clone()
+        self.target_upper = limits[..., 1].clone()
+
         if self.cfg.clip is not None:
-            self._processed_actions = self._processed_actions.clamp(self._clip[...,0],self._clip[...,1])
+            self.target_lower = torch.maximum(
+                self.target_lower,
+                self._clip[..., 0],
+            )
+            self.target_upper = torch.minimum(
+                self.target_upper,
+                self._clip[..., 1],
+            )
+
+        if bool(
+            (self.target_lower >= self.target_upper).any()
+        ):
+            raise ValueError("关节目标范围无效")
+
+    # def process_actions(self, actions):
+        # self._raw_actions.copy_(actions)
+        # self.executed_raw = actions + self.cfg.noise_std * torch.randn_like(actions)
+        # self.last_executed.copy_(self.executed_raw)
+        # self._processed_actions = self.executed_raw * self._scale + self._offset
+        # if self.cfg.clip is not None:
+        #     self._processed_actions = self._processed_actions.clamp(self._clip[...,0],self._clip[...,1])
+    def process_actions(self, actions):
+        # 观测和动作变化正则仍然使用干净动作。
+        self._raw_actions.copy_(actions)
+
+        noisy_action = (
+            actions
+            + self.cfg.noise_std
+            * torch.randn_like(actions)
+        )
+
+        requested_target = (
+            noisy_action * self._scale
+            + self._offset
+        )
+
+        # 噪声也不能把最终目标推出关节允许范围。
+        self._processed_actions = torch.maximum(
+            torch.minimum(
+                requested_target,
+                self.target_upper,
+            ),
+            self.target_lower,
+        )
+
+        # 世界模型必须记录实际执行目标对应的动作，
+        # 不能继续记录裁剪前的 noisy_action。
+        self.executed_raw = (
+            self._processed_actions - self._offset
+        ) / self._scale
+
+        self.last_executed.copy_(
+            self.executed_raw
+        )
+
 
     def reset(self, env_ids=None):
         super().reset(env_ids)

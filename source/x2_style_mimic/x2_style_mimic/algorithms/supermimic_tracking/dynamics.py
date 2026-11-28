@@ -1,6 +1,9 @@
 # 改编自 CuboiLeo/SuperMimic-Reproduced，MIT；完整许可见 LICENSE.reproduced。
-"""Dynamics MLP f_omega (paper Table A.4: MLP (2048, 2048, 2048))."""
-
+"""Dynamics MLP f_omega (paper Table A.4: MLP (2048, 2048, 2048)).
+    世界模型中的动力学网络,
+    它不直接预测完整的下一状态，而是预测一个状态修正量 delta，
+    再由 StateSpec.integrate() 将修正量应用到当前状态上。
+"""
 from __future__ import annotations
 
 import torch
@@ -8,6 +11,15 @@ import torch.nn as nn
 
 
 class MLP(nn.Module):
+    """
+    参数含义：
+    - in_dim：输入维度
+    - hidden：隐藏层维度，例如 (2048, 2048, 2048)
+    - out_dim：输出维度
+    - act：激活函数，默认是 SiLU
+    - zero_last：是否将最后一层初始化为全零
+    - last_gain：如果不使用全零初始化，是否使用指定增益的正交初始化
+    """
     def __init__(self, in_dim: int, hidden: tuple[int, ...], out_dim: int, act=nn.SiLU, zero_last: bool = False, last_gain: float | None = None):
         super().__init__()
         layers: list[nn.Module] = []
