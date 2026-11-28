@@ -13,4 +13,4 @@ run_name = "joint_probe_wm8_actor32_defaultweights"
 compile = "none"
 
 [policy_trainer]
-compile = "none"
+compile = "default"
