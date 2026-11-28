@@ -63,8 +63,6 @@ def _prime_runner_from_current_environment(runner) -> None:
     read-only audit we only need a valid initial world-state history, which is
     exactly what the first reset has already provided.
     """
-    import torch
-
     current = runner.env.read_world_state().to(runner.device)
     runner.history = current[:, None].expand(-1, runner.history_length, -1).clone()
     runner._read_commands()

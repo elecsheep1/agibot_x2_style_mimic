@@ -95,6 +95,26 @@ def _install_supermimic_runtime_compat(runtime_module) -> None:
     build_runtime_compat._isaaclab3_compatible = True
     runtime_module.build_runtime = build_runtime_compat
 
+    # The legacy get-up config pins PhysX to PGS (solver_type=0).  SuperMimic
+    # updates the assist-force interface every control step, which Isaac Sim
+    # 6.2 explicitly does not support with PGS.  TGS is solver_type=1 and is
+    # the compatible choice.  Keep this migration-only so the source config
+    # remains an accurate record of the legacy experiment.
+    original_training_env_cfg = runtime_module.training_env_cfg
+    if not getattr(original_training_env_cfg, "_isaaclab3_tgs_compatible", False):
+
+        @wraps(original_training_env_cfg)
+        def training_env_cfg_compat(args):
+            env_cfg = original_training_env_cfg(args)
+            if env_cfg.sim.physics is None:
+                raise RuntimeError("SuperMimic environment did not configure PhysX")
+            env_cfg.sim.physics.solver_type = 1
+            print("[compat] PhysX solver set to TGS (solver_type=1)", flush=True)
+            return env_cfg
+
+        training_env_cfg_compat._isaaclab3_tgs_compatible = True
+        runtime_module.training_env_cfg = training_env_cfg_compat
+
 
 def main() -> None:
     """Install the launcher compatibility shim and run the existing trainer."""
