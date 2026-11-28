@@ -1,0 +1,4 @@
+# 其余参数读取 algorithms/supermimic_tracking/config.py 的复现默认值。
+run_name = "x2_reference_tracking_scratch"
+num_envs = 4096
+iterations = 320000

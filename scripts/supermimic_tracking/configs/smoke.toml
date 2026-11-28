@@ -1,0 +1,27 @@
+run_name = "x2_reference_tracking_smoke"
+num_envs = 16
+iterations = 50
+replay_capacity = 128
+warmup_steps = 12
+log_interval = 5
+checkpoint_interval = 25
+domain_randomization = false
+reset_noise = false
+obs_noise = false
+
+[world_model]
+hidden = [128, 128]
+[wm_trainer]
+batch_size = 16
+batches_per_update = 2
+compile = "none"
+[policy]
+encoder_hidden = [128, 64]
+decoder_hidden = [128, 64]
+[critic]
+hidden = [64, 32]
+[policy_trainer]
+batch_size = 16
+critic_epochs = 2
+critic_minibatches = 2
+compile = "none"
