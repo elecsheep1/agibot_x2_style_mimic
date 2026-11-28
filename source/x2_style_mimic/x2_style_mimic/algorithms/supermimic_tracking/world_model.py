@@ -63,14 +63,67 @@ class WorldModel(nn.Module):
 
     # ------------------------------------------------------------------ Eq. 1
 
-    def _loss_step(self, s, a, xi, s_true, done, ref_root_pos, ref_root_quat):
-        """One autoregressive step of Eq. 1: returns (s_next, sq_err (n,70), term_bce (n,), logits (n,))."""
+    # def _loss_step(self, s, a, xi, s_true, done, ref_root_pos, ref_root_quat):
+    #     """One autoregressive step of Eq. 1: returns (s_next, sq_err (n,70), term_bce (n,), logits (n,))."""
+    #     s_next = self.step(s, a, xi)
+    #     e = self.spec.error_vector(s_next, s_true)
+    #     feats = self.heads.termination_features(s_next[..., 0:3], s_next[..., 3:7], ReferenceFrame(None, None, None, None, ref_root_pos, ref_root_quat))
+    #     logits = self.term_head(feats)
+    #     bce = F.binary_cross_entropy_with_logits(logits, done, reduction="none")
+    #     return s_next, e * e, bce, logits
+    def _loss_step(
+        self,
+        s,
+        a,
+        xi,
+        s_true,
+        done,
+        ref_root_pos,
+        ref_root_quat,
+    ):
+        # 动力学仍然执行自回归预测。
         s_next = self.step(s, a, xi)
-        e = self.spec.error_vector(s_next, s_true)
-        feats = self.heads.termination_features(s_next[..., 0:3], s_next[..., 3:7], ReferenceFrame(None, None, None, None, ref_root_pos, ref_root_quat))
-        logits = self.term_head(feats)
-        bce = F.binary_cross_entropy_with_logits(logits, done, reduction="none")
-        return s_next, e * e, bce, logits
+        error = self.spec.error_vector(
+            s_next,
+            s_true,
+        )
+
+        reference = ReferenceFrame(
+            None,
+            None,
+            None,
+            None,
+            ref_root_pos,
+            ref_root_quat,
+        )
+
+        # 失败头使用真实下一状态对应的特征。
+        # detach 阻断分类损失对状态输入的梯度，
+        # 不会阻断失败头自身参数的梯度。
+        features = self.heads.termination_features(
+            s_true[..., 0:3],
+            s_true[..., 3:7],
+            reference,
+        ).detach()
+
+        logits = self.term_head(features)
+
+        labels = done.to(
+            dtype=logits.dtype,
+        )
+
+        bce = F.binary_cross_entropy_with_logits(
+            logits,
+            labels,
+            reduction="none",
+        )
+
+        return (
+            s_next,
+            error.square(),
+            bce,
+            logits,
+        )
 
     def enable_compile(self, mode: str | None = "default") -> None:
         self._loss_step_fn = torch.compile(self._loss_step, mode=None if mode == "default" else mode, dynamic=False) if mode else self._loss_step
@@ -89,6 +142,10 @@ class WorldModel(nn.Module):
         metrics = {}
         err_first = None
         err_last = None
+
+        term_logits = []
+        term_labels = []
+
         acc_num = 0.0
         step_fn = getattr(self, "_loss_step_fn", None) or self._loss_step
         for j in range(k):
@@ -101,6 +158,14 @@ class WorldModel(nn.Module):
                     err_first = nse
                 err_last = nse
                 acc_num += ((logits > 0).float() == done[j]).float().mean()
+
+                term_logits.append(
+                    logits.detach()
+                )
+                term_labels.append(
+                    done[j].detach()
+                )
+
         loss = total_state / k + self.cfg.term_loss_weight * total_term / k
         # Metrics stay on-device (detached tensors): a float() here would stall the CPU on the
         # forward pass every minibatch, which in data-parallel runs turns into lockstep waiting.
@@ -111,6 +176,74 @@ class WorldModel(nn.Module):
             nse_kstep=err_last.detach(),
             term_acc=(acc_num / k).detach(),
         )
+
+        with torch.no_grad():
+            all_logits = torch.stack(
+                term_logits,
+                dim=0,
+            )
+            labels = (
+                torch.stack(
+                    term_labels,
+                    dim=0,
+                ) > 0.5
+            )
+
+            predicted = all_logits > 0.0
+            probabilities = all_logits.sigmoid()
+
+            positive = labels
+            negative = ~labels
+
+            metrics.update(
+                term_positive_count=(
+                    positive.sum()
+                    .to(all_logits.dtype)
+                ),
+                term_negative_count=(
+                    negative.sum()
+                    .to(all_logits.dtype)
+                ),
+
+                # 正确识别失败。
+                term_tp=(
+                    (predicted & positive)
+                    .sum()
+                    .to(all_logits.dtype)
+                ),
+
+                # 真实失败，却预测正常。
+                term_fn=(
+                    (~predicted & positive)
+                    .sum()
+                    .to(all_logits.dtype)
+                ),
+
+                # 真实正常，却预测失败。
+                term_fp=(
+                    (predicted & negative)
+                    .sum()
+                    .to(all_logits.dtype)
+                ),
+
+                # 正确识别正常。
+                term_tn=(
+                    (~predicted & negative)
+                    .sum()
+                    .to(all_logits.dtype)
+                ),
+
+                term_positive_probability_sum=(
+                    probabilities
+                    * positive.to(probabilities.dtype)
+                ).sum(),
+
+                term_negative_probability_sum=(
+                    probabilities
+                    * negative.to(probabilities.dtype)
+                ).sum(),
+            )
+
         return loss, metrics
 
     # ------------------------------------------------------------------ diagnostics
