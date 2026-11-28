@@ -4,9 +4,26 @@ import torch
 from refit_fixed_dynamics import split_data, gather
 from diagnose_tracking import valid_windows
 from test_error_audit import make_data
+from test_failure_supervision import wm
+from types import SimpleNamespace
+from unittest.mock import patch
+import sys
+from refit_fixed_dynamics import initialize_model
 
 
 class FixedDynamicsTests(unittest.TestCase):
+    def test_capacity_change_requires_scratch_and_preserves_head(self):
+        original=wm.WorldModel(wm.WorldModelCfg(hidden=(16,)),SimpleNamespace(),'cpu')
+        checkpoint={'world':original.state_dict()}
+        with patch.dict(sys.modules,{'x2_style_mimic.algorithms.supermimic_tracking.world_model':wm}):
+            with self.assertRaises(ValueError):
+                initialize_model(wm.WorldModelCfg(),checkpoint,SimpleNamespace(),'cpu',hidden=[32,32])
+            larger=initialize_model(wm.WorldModelCfg(),checkpoint,SimpleNamespace(),'cpu',scratch=True,hidden=[32,32])
+        for k,v in original.term_head.state_dict().items():
+            torch.testing.assert_close(v,larger.term_head.state_dict()[k])
+        self.assertGreater(sum(p.numel() for p in larger.dynamics.parameters()),sum(p.numel() for p in original.dynamics.parameters()))
+        torch.testing.assert_close(larger.dynamics(torch.zeros(2,75),torch.zeros(2,29),torch.zeros(2,35)),torch.zeros(2,74))
+
     def test_split_is_disjoint_and_reproducible(self):
         data=make_data(envs=16)
         groups,ids=split_data(data,43)

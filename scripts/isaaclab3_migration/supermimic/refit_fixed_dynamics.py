@@ -28,6 +28,23 @@ def gather(data, options, batch_size, horizon, generator):
     return data['state'][start,env],data['next_state'][times,ee],data['executed'][times,ee],data['context'][start,env]
 
 
+def initialize_model(cfg, checkpoint, heads, device, *, scratch=False, hidden=None):
+    from x2_style_mimic.algorithms.supermimic_tracking.world_model import WorldModel
+    if hidden is not None:
+        if not scratch:
+            raise ValueError('改变网络容量必须显式选择从头拟合，不能部分加载旧网络')
+        if not hidden or min(hidden)<1:
+            raise ValueError('隐藏层宽度必须为正整数')
+        cfg.hidden=tuple(hidden)
+    model=WorldModel(cfg,heads,device)
+    if scratch:
+        model.term_head.load_state_dict({k.removeprefix('term_head.'):v for k,v in checkpoint['world'].items()
+                                        if k.startswith('term_head.')},strict=True)
+    else:
+        model.load_state_dict(checkpoint['world'],strict=True)
+    return model
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('checkpoint','data','output'):
@@ -39,6 +56,8 @@ def main():
     parser.add_argument('--lr',type=float,default=2e-4)
     parser.add_argument('--seed',type=int,default=43)
     parser.add_argument('--device',default='cuda:0')
+    parser.add_argument('--scratch',action='store_true',help='仅动力学从头拟合，失败头继续冻结')
+    parser.add_argument('--hidden',type=int,nargs='+',help='从头拟合时的隐藏层宽度')
     args=parser.parse_args()
     if min(args.updates,args.batch_size,args.windows)<1 or args.lr<=0:
         parser.error('更新次数、批量、窗口数量和学习率必须为正数')
@@ -55,13 +74,13 @@ def main():
     # 使用保存配置中的训练转移数，不改变原有窗口口径。
     horizons=[int(checkpoint['config']['wm_trainer']['window'])]
     if not horizons or min(horizons)<1:raise ValueError('检查点训练窗口配置无效')
-    model=WorldModel(cfg,SimpleNamespace(termination_features=AnalyticHeads.termination_features),args.device)
-    model.load_state_dict(checkpoint['world'],strict=True)
+    model=initialize_model(cfg,checkpoint,SimpleNamespace(termination_features=AnalyticHeads.termination_features),
+                           args.device,scratch=args.scratch,hidden=args.hidden)
     model.term_head.requires_grad_(False)
     head_before=copy.deepcopy(model.term_head.state_dict())
     optimizer=torch.optim.Adam(model.dynamics.parameters(),lr=args.lr)
     cohorts={name:{k:(v.to(args.device) if isinstance(v,torch.Tensor) else v) for k,v in sample_cohort(groups[name],args.windows,args.seed).items()}
-             for name in ('validation','test')}
+             for name in ('train','validation','test')}
     options={h:valid_windows(groups['train']['terminated']|groups['train']['truncated'],h) for h in horizons}
     if any(len(v)==0 for v in options.values()):raise ValueError('训练集缺少连续窗口')
     def evaluate(name):
@@ -70,6 +89,9 @@ def main():
         return {str(h):component_metrics(pred[:,h-1],c['following'][:,h-1],quat_box_minus) for h in (1,8,16,32)}
     report=dict(checkpoint=str(args.checkpoint),data=str(args.data),data_check=checked,environment_groups=ids,
         transitions=horizons,window_frames=[h+1 for h in horizons],lr=args.lr,seed=args.seed,
+        initialization='scratch' if args.scratch else 'checkpoint',hidden=list(cfg.hidden),
+        dynamics_parameters=sum(p.numel() for p in model.dynamics.parameters()),
+        fixed_cohorts={name:dict(starts=c['starts'].cpu().tolist(),envs=c['envs'].cpu().tolist()) for name,c in cohorts.items()},
         notes=['只更新 dynamics，使用原有归一化状态误差损失；优化器重新初始化。',
                '训练、验证、测试按环境隔离；固定窗口起点唯一，但回合内窗口可以重叠。',
                '仅按验证集 8 步误差选择模型，测试集不参与选择。'],history=[])
@@ -108,7 +130,9 @@ def main():
     if not all(torch.equal(v,model.term_head.state_dict()[k]) for k,v in head_before.items()):
         raise RuntimeError('失败头意外发生变化')
     # 独立诊断产物，不能误当成可直接续训的完整检查点。
-    torch.save(dict(kind='fixed_dynamics_refit_v1',world={k:v.cpu() for k,v in best_state.items()},source=str(args.checkpoint)),args.output/'dynamics_refit.pt')
+    from dataclasses import asdict
+    torch.save(dict(kind='fixed_dynamics_refit_v1',world={k:v.cpu() for k,v in best_state.items()},
+                    world_config=asdict(cfg),source=str(args.checkpoint)),args.output/'dynamics_refit.pt')
     (args.output/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2))
     print('[完成] 策略与价值网络未加载、未更新；失败头保持不变',flush=True)
 
