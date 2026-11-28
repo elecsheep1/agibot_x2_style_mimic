@@ -51,7 +51,11 @@ if isinstance(env_ids, slice):
 
 不要在 `build_runtime()` 已经完成 `env.reset()` 后无条件再调用一次 `env.reset()`。对于只读诊断，直接从当前环境状态建立 runner history，避免触发旧环境的重复 reset 路径。
 
-## 5. 自定义环境的迁移检查
+## 5. 空 Manager 配置
+
+旧任务有时会用 `events = None` 或 `curriculum = None` 表示“没有 term”。Isaac Lab 3 仍会构造相应 Manager 并解析配置，因此 `None` 会在首次 `SimulationContext.reset()` 时触发 `AttributeError: 'NoneType' object has no attribute '__dict__'`。迁移层必须替换为没有字段的 `@configclass` 空配置对象；不要修改原任务配置以免影响旧环境复现。
+
+## 6. 自定义环境的迁移检查
 
 每个任务先做一次小规模冒烟检查（如 16 或 32 环境），按顺序确认：
 
@@ -63,7 +67,7 @@ if isinstance(env_ids, slice):
 
 不应先用 4096 环境排查 API 迁移错误。确认单步通过后，再按照显存和 batch 配置扩容。
 
-## 6. 当前项目入口
+## 7. 当前项目入口
 
 | 工作流 | 使用入口 |
 | --- | --- |
@@ -74,7 +78,7 @@ if isinstance(env_ids, slice):
 
 原始 `scripts/rsl_rl/`、`scripts/supermimic/` 与 `scripts/supermimic_tracking/` 文件不作为新机器的 Isaac Lab 3 启动入口。
 
-## 7. 常见非根因日志
+## 8. 常见非根因日志
 
 - `env_cfg.viewer is deprecated`：配置迁移提示，不会导致训练退出。
 - 远程资产从 `/tmp` cache 加载：首次会校验远端，通常不影响正确性。

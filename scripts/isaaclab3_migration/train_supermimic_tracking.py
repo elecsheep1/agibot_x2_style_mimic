@@ -86,6 +86,32 @@ def _supply_remote_urdf(argv: list[str]) -> None:
     print(f"[compat] Using migrated X2 URDF: {DEFAULT_URDF}", flush=True)
 
 
+def _replace_null_manager_configs(env_cfg) -> None:
+    """Translate Lab 2's ``None`` manager configs to empty Lab 3 configs.
+
+    Isaac Lab 3 constructs the Event/Curriculum managers and resolves their
+    terms even when a legacy environment set the corresponding config to
+    ``None``.  An empty config object is the explicit Lab 3 representation of
+    "no terms".
+    """
+    from isaaclab.utils.configclass import configclass
+
+    @configclass
+    class EmptyEventsCfg:
+        pass
+
+    @configclass
+    class EmptyCurriculumCfg:
+        pass
+
+    if env_cfg.events is None:
+        env_cfg.events = EmptyEventsCfg()
+        print("[compat] Replaced legacy events=None with an empty Event config", flush=True)
+    if env_cfg.curriculum is None:
+        env_cfg.curriculum = EmptyCurriculumCfg()
+        print("[compat] Replaced legacy curriculum=None with an empty Curriculum config", flush=True)
+
+
 def main() -> None:
     if not TRACKING_ENTRYPOINT.is_file():
         raise FileNotFoundError(TRACKING_ENTRYPOINT)
@@ -122,6 +148,7 @@ def main() -> None:
         env_cfg.root_tilt_threshold = cfg.world_model.tilt_threshold
         env_cfg.commands.motion.future_frames = cfg.policy_trainer.future_frames
         env_cfg.commands.motion.sampling_mode = "start" if args.evaluate else "return"
+        _replace_null_manager_configs(env_cfg)
         if args.motion_manifest:
             env_cfg.motion_manifest = str(args.motion_manifest.resolve())
         if args.urdf:
