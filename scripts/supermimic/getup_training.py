@@ -1,6 +1,7 @@
 """起身实验调度：组装现有算法，执行预热、联合训练、评估和保存。"""
 import ast
 import hashlib
+import time
 from pathlib import Path
 
 import torch
@@ -8,7 +9,7 @@ import torch
 from getup_checkpointing import plot_metrics, restore_rng, save_checkpoint
 from getup_config import PROJECT
 from getup_evaluation import build_cohort, evaluate
-from getup_logging import ConsoleTable, GetupLogger
+from getup_logging import IsaacLabConsole, GetupLogger
 from getup_warmup import warmup_world_model
 
 
@@ -44,16 +45,7 @@ class GetupTrainingRun:
         self.cohort = build_cohort(runtime, cfg.eval_seed)
         self.metadata = self._metadata()
         self.logger = None
-        self.train_table = ConsoleTable(
-            'train',
-            ('iter', 'world_loss', 'imagined', 'act_rms', 'style', 'progress'),
-            (6, 12, 12, 10, 9, 9),
-        )
-        self.eval_table = ConsoleTable(
-            'eval',
-            ('iter', 'standing', 'progress', 'success', 'max_hold', 'real_ret', 'recomputed'),
-            (6, 10, 10, 9, 10, 12, 12),
-        )
+        self.console = IsaacLabConsole(cfg.run_name)
         if checkpoint is not None:
             self._check_resume()
             restore_rng(checkpoint)
@@ -109,26 +101,21 @@ class GetupTrainingRun:
         )
 
     def _evaluate(self, iteration):
-        print(f'eval  {iteration}  开始，每环境最多 {self.cfg.eval_seconds:g} 秒', flush=True)
+        print(f'[Evaluation {iteration}/{self.cfg.iterations}] Running {self.cfg.eval_seconds:g}s of simulation per environment...', flush=True)
+        started = time.perf_counter()
         report = evaluate(self.runtime, self.cohort, self.cfg.eval_seconds, self.cfg.eval_seed)
         self.logger.write_json(f'evaluation_{iteration:06d}.json', report)
         self.logger.record('evaluation', iteration, report['metrics'])
         self.logger.flush()
         metrics = report['metrics']
-        progress = metrics.get('proxy_terms/progress')
-        self.eval_table.row((
-            iteration,
-            f"{metrics['standing_quality_mean']:.4f}",
-            f'{progress:+.4f}' if progress is not None else '-',
-            f"{metrics['task_success_rate']:.1%}",
-            f"{metrics['task_max_hold_seconds']:.2f}s",
-            f"{metrics['real_task_return']:+.4f}",
-            f"{metrics['recomputed_task_return']:+.4f}",
-        ))
+        self.console.evaluation(
+            iteration, self.cfg.iterations, metrics, time.perf_counter() - started,
+        )
 
     def _train_iteration(self, iteration):
         cfg = self.cfg
         horizon = cfg.world_horizons[(iteration - 1) % len(cfg.world_horizons)]
+        started = time.perf_counter()
         metrics = self.runtime.runner.train_iteration(
             self.runtime.reference,
             collection_steps=cfg.collection_steps,
@@ -141,21 +128,22 @@ class GetupTrainingRun:
             offline_world_replay=self.runtime.offline,
             offline_world_fraction=cfg.offline_world_fraction,
         )
+        iteration_seconds = time.perf_counter() - started
+        metrics['performance/iteration_seconds'] = iteration_seconds
+        metrics['performance/transitions_per_second'] = metrics['collection/transitions'] / max(iteration_seconds, 1e-9)
         metrics['world_window_frames'] = horizon
         metrics['world_transition_steps'] = horizon - 1
         metrics['imagination_horizon'] = cfg.imagination_horizon
         metrics['imagined_task_reward'] = metrics['imagined_reward'] - metrics['reward/style']
         self.logger.record('train', iteration, metrics)
-        if iteration % cfg.log_interval == 0 or iteration == self.start + 1:
-            progress = metrics.get('reward/progress')
-            self.train_table.row((
-                iteration,
-                f"{metrics['world_loss']:.6f}",
-                f"{metrics['imagined_task_reward']:+.6f}",
-                f"{metrics['collection/action_rms']:.3f}",
-                f"{metrics['reward/style']:+.4f}",
-                f'{progress:+.4f}' if progress is not None else '-',
-            ))
+        emit = (iteration % cfg.log_interval == 0 or iteration == self.start + 1
+                or iteration == cfg.iterations)
+        self.console.iteration(
+            iteration, cfg.iterations, metrics, iteration_seconds,
+            self.runtime.runner.total_env_steps * self.runtime.env.num_envs,
+            cfg.action_noise, emit=emit,
+        )
+        if emit:
             self.logger.flush()
 
     def _finish(self):
@@ -191,17 +179,7 @@ class GetupTrainingRun:
 
     def run(self):
         cfg, runtime = self.cfg, self.runtime
-        print('SuperMimic 起身训练', flush=True)
-        print(f'  output   {cfg.output}', flush=True)
-        print(
-            f'  init     {runtime.metadata["initialization_mode"]}'
-            f'    envs {cfg.num_envs}'
-            f'    window {list(cfg.world_horizons)} frames'
-            f' / {[frames - 1 for frames in cfg.world_horizons]} transitions'
-            f'    imagine {cfg.imagination_horizon} steps'
-            f'    iters {cfg.iterations}',
-            flush=True,
-        )
+        self.console.startup(cfg, runtime.metadata)
         with GetupLogger(cfg, self.metadata, self.cohort) as self.logger:
             self._save(f'checkpoint_{self.start:06d}.pt', self.start)
             self._evaluate(self.start)

@@ -467,9 +467,16 @@ class X2MultiMotionGetUpEnvCfg(X2StyleMimicEnvCfg):
     assist_curriculum_threshold: float = 0.80
     assist_curriculum_final_threshold: float = 0.70
 
-    # AMP 奖励按连续稳定时长平滑退出。
-    amp_gate_fade_start_s: float = 0.10
-    amp_gate_fade_end_s: float = 0.50
+    # AMP 奖励门控：独立于成功判定的站立阶段。
+    amp_stage_enter_height: float = 0.58
+    amp_stage_enter_tilt_deg: float = 25.0
+    amp_stage_enter_duration_s: float = 0.20
+    # 明显倒下后才重新进入恢复阶段。
+    amp_stage_exit_height: float = 0.45
+    amp_stage_exit_duration_s: float = 0.50
+    # 站立阶段切换时，门控平滑变化。
+    amp_stage_fade_s: float = 0.50
+
     # 超过该连续稳定时长的状态，不进入 AMP 策略样本窗口。
     amp_policy_sample_max_hold_s: float = 0.10
 

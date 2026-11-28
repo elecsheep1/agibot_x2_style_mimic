@@ -29,11 +29,11 @@ class MultiMotionAMPAlgorithmCfg(RslRlPpoAlgorithmCfg):
         "num_steps": 5,
         "style_reward_mapping": "softplus",
         # 动态课程关闭时使用；启用后实际权重由课程维护。
-        "style_reward_weight": 15.0,
+        "style_reward_weight": 10.0,
 
         "weight_curriculum": {
-            "enabled": False,
-            "min_weight": 5.0,
+            "enabled": True,
+            "min_weight": 10.0,
             "max_weight": 20.0,
             "increment": 0.5,
             "check_interval": 100,
@@ -56,7 +56,7 @@ class MultiMotionAMPAlgorithmCfg(RslRlPpoAlgorithmCfg):
         "normalization_clip": 10.0,
 
         "buffer_capacity": 500_000,
-        "updates_per_iteration": 5,
+        "updates_per_iteration": 20,
         "batch_size": 4096,
         # 按本轮实际入池比例缩减判别器更新次数。
         "dynamic_updates_enabled": True,

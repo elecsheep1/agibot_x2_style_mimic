@@ -16,6 +16,7 @@ from .x2_style_mimic_env_cfg import POLICY_JOINT_NAMES
 from .mdp.self_contact import (
     reset_ground_contact_sensors,
 )
+from .mdp.getup import ground_contact_force
 
 class X2AMPGetUpEnv(ManagerBasedRLEnv):
     """保留普通环境返回值，额外返回 AMP 的真实步后状态。"""
@@ -111,7 +112,173 @@ class X2AMPGetUpEnv(ManagerBasedRLEnv):
         )
 
 class X2MultiMotionGetUpEnv(X2AMPGetUpEnv):
+    def _ensure_amp_stage(self):
+        """延迟初始化，兼容构造环境时调用 reset。"""
+        if hasattr(self, "_amp_standing_stage"):
+            return
+
+        cfg = self.cfg
+
+        values = (
+            cfg.amp_stage_enter_height,
+            cfg.amp_stage_exit_height,
+            cfg.amp_stage_enter_tilt_deg,
+            cfg.amp_stage_enter_duration_s,
+            cfg.amp_stage_exit_duration_s,
+            cfg.amp_stage_fade_s,
+        )
+        if not all(math.isfinite(float(x)) for x in values):
+            raise ValueError("AMP 阶段参数必须为有限数")
+        if not (
+            0.0 < cfg.amp_stage_exit_height
+            < cfg.amp_stage_enter_height
+        ):
+            raise ValueError("AMP 退出高度必须低于进入高度")
+        if not 0.0 < cfg.amp_stage_enter_tilt_deg < 90.0:
+            raise ValueError("AMP 进入倾角必须在 (0, 90) 度")
+        if min(
+            cfg.amp_stage_enter_duration_s,
+            cfg.amp_stage_exit_duration_s,
+            cfg.amp_stage_fade_s,
+        ) <= 0.0:
+            raise ValueError("AMP 阶段持续时间必须大于零")
+
+        self._amp_stage_torso_cfg = SceneEntityCfg(
+            "robot",
+            body_names=["torso_link"],
+            preserve_order=True,
+        )
+        self._amp_stage_torso_cfg.resolve(self.scene)
+
+        self._amp_stage_foot_cfgs = (
+            SceneEntityCfg("left_foot_ground_contact"),
+            SceneEntityCfg("right_foot_ground_contact"),
+        )
+
+        with torch.inference_mode(False):
+            self._amp_standing_stage = torch.zeros(
+                self.num_envs,
+                dtype=torch.bool,
+                device=self.device,
+            )
+            self._amp_stage_enter_s = torch.zeros(
+                self.num_envs, device=self.device
+            )
+            self._amp_stage_exit_s = torch.zeros(
+                self.num_envs, device=self.device
+            )
+            self._amp_stage_blend = torch.zeros(
+                self.num_envs, device=self.device
+            )
+
+    @torch.no_grad()
+    def _update_amp_stage(self, env_ids):
+        """每个环境每个控制步调用一次，返回当前奖励门控。"""
+        self._ensure_amp_stage()
+
+        if len(env_ids) == 0:
+            return self._amp_stage_blend[env_ids]
+
+        robot = self.scene["robot"]
+        cfg = self.cfg
+        dt = float(self.step_dt)
+
+        height = (
+            robot.data.root_pos_w.torch[env_ids, 2]
+            - self.scene.env_origins[env_ids, 2]
+        )
+
+        root_up = (
+            -robot.data.projected_gravity_b.torch[env_ids, 2]
+        )
+
+        torso_q = robot.data.body_link_pose_w.torch[
+            :, self._amp_stage_torso_cfg.body_ids, 3:7
+        ][env_ids]
+        torso_q = torso_q / torso_q.norm(
+            dim=-1, keepdim=True
+        ).clamp_min(1e-8)
+
+        # 当前项目四元数为 xyzw。
+        torso_up = (
+            1.0 - 2.0 * torso_q[..., :2].square().sum(dim=-1)
+        ).amin(dim=-1)
+
+        both_feet = torch.stack(
+            [
+                ground_contact_force(self, foot_cfg)[env_ids] > 5.0
+                for foot_cfg in self._amp_stage_foot_cfgs
+            ],
+            dim=-1,
+        ).all(dim=-1)
+
+        up_threshold = math.cos(
+            math.radians(cfg.amp_stage_enter_tilt_deg)
+        )
+
+        enter_condition = (
+            (height >= cfg.amp_stage_enter_height)
+            & (root_up >= up_threshold)
+            & (torso_up >= up_threshold)
+            & both_feet
+        )
+
+        # 退出不依赖速度或短暂接触变化。
+        exit_condition = height < cfg.amp_stage_exit_height
+
+        was_standing = self._amp_standing_stage[env_ids]
+
+        enter_s = torch.where(
+            (~was_standing) & enter_condition,
+            self._amp_stage_enter_s[env_ids] + dt,
+            0.0,
+        )
+        exit_s = torch.where(
+            was_standing & exit_condition,
+            self._amp_stage_exit_s[env_ids] + dt,
+            0.0,
+        )
+
+        standing = (
+            was_standing
+            | (enter_s + 1e-6 >= cfg.amp_stage_enter_duration_s)
+        )
+        standing &= ~(
+            exit_s + 1e-6 >= cfg.amp_stage_exit_duration_s
+        )
+
+        self._amp_standing_stage[env_ids] = standing
+        self._amp_stage_enter_s[env_ids] = torch.where(
+            standing, 0.0, enter_s
+        )
+        self._amp_stage_exit_s[env_ids] = torch.where(
+            standing, exit_s, 0.0
+        )
+
+        # blend=0 对应起身阶段，blend=1 对应站立阶段。
+        direction = torch.where(standing, 1.0, -1.0)
+        blend = (
+            self._amp_stage_blend[env_ids]
+            + direction * dt / cfg.amp_stage_fade_s
+        ).clamp(0.0, 1.0)
+
+        self._amp_stage_blend[env_ids] = blend
+        smooth_blend = blend.square() * (3.0 - 2.0 * blend)
+
+        return 1.0 - smooth_blend
+
     def step(self, action):
+        self._ensure_amp_stage()
+
+        # 自动重置前保存终止步结果，避免使用下一回合的姿态。
+        self._amp_stage_terminal_gate = torch.ones(
+            self.num_envs, device=self.device
+        )
+        self._amp_stage_terminal_standing = torch.zeros(
+            self.num_envs,
+            dtype=torch.bool,
+            device=self.device,
+        )
         # 必须在 step 前保存：自动重置会换成下一回合的动作编号。
         motion_ids = (
             self._getup_reference_motion_ids.clone()
@@ -187,26 +354,39 @@ class X2MultiMotionGetUpEnv(X2AMPGetUpEnv):
             snapshot["hold_seconds"] + 1e-6 >= required_hold
         )
 
-        # 使用终止判断阶段保存的真实步后快照。
-        # 即使本步自动重置，也不会读到下一回合的稳定时长。
-        fade_start = float(self.cfg.amp_gate_fade_start_s)
-        fade_end = float(self.cfg.amp_gate_fade_end_s)
-        sample_max_hold = float(self.cfg.amp_policy_sample_max_hold_s)
-        # 在运行时检查，覆盖 Hydra 最终传入的参数。
-        if not (
-            math.isfinite(fade_start)
-            and math.isfinite(fade_end)
-            and 0.0 <= fade_start < fade_end
-        ):
-            raise ValueError("AMP 门控要求 0 <= fade_start_s < fade_end_s,且参数必须为有限数")
-        if not (math.isfinite(sample_max_hold) and sample_max_hold >= 0.0):
-            raise ValueError("AMP 策略样本最大连续稳定时长要求 >= 0.0,且参数必须为有限数")
-        hold = snapshot["hold_seconds"]
-        blend = ((hold - fade_start) / (fade_end - fade_start)).clamp(0.0, 1.0)
-        blend = blend.square() * (3.0 - 2.0 * blend)  # smoothstep
+        # 已结束环境的姿态已经重置，使用重置前保存的门控。
+        done = terminated | truncated
+        live_ids = (~done).nonzero(as_tuple=False).flatten()
 
-        extras["amp_reward_gate"] = 1.0 - blend
-        extras["amp_policy_sample_mask"] = (hold <= sample_max_hold)
+        gate = self._amp_stage_terminal_gate.clone()
+        standing_stage = self._amp_stage_terminal_standing.clone()
+
+        gate[live_ids] = self._update_amp_stage(live_ids)
+        standing_stage[live_ids] = (
+            self._amp_standing_stage[live_ids]
+        )
+
+        extras["amp_reward_gate"] = gate
+
+        # 本轮仅改奖励门控，判别器样本门控保持原样。
+        sample_max_hold = float(
+            self.cfg.amp_policy_sample_max_hold_s
+        )
+        if not (
+            math.isfinite(sample_max_hold)
+            and sample_max_hold >= 0.0
+        ):
+            raise ValueError("AMP 样本门控时长必须为非负有限数")
+
+        hold = snapshot["hold_seconds"]
+        extras["amp_policy_sample_mask"] = (
+            hold <= sample_max_hold
+        )
+
+        log["AMPStage/standing_fraction"] = (
+            standing_stage.float().mean().item()
+        )
+        log["AMPStage/reward_gate_mean"] = gate.mean().item()
 
         return (
             observations,
@@ -217,6 +397,19 @@ class X2MultiMotionGetUpEnv(X2AMPGetUpEnv):
         )
 
     def _reset_idx(self, env_ids):
+        self._ensure_amp_stage()
+
+        if (
+            getattr(self, "_amp_capture_active", False)
+            and len(env_ids) > 0
+        ):
+            self._amp_stage_terminal_gate[env_ids] = (
+                self._update_amp_stage(env_ids)
+            )
+            self._amp_stage_terminal_standing[env_ids] = (
+                self._amp_standing_stage[env_ids]
+            )
+
         episode_stats = None
 
         if (
@@ -268,6 +461,12 @@ class X2MultiMotionGetUpEnv(X2AMPGetUpEnv):
 
         # 父类先捕获 AMP 终止状态，再执行实际重置。
         super()._reset_idx(env_ids)
+
+        # 新回合不能继承上一回合的阶段和淡出进度。
+        self._amp_standing_stage[env_ids] = False
+        self._amp_stage_enter_s[env_ids] = 0.0
+        self._amp_stage_exit_s[env_ids] = 0.0
+        self._amp_stage_blend[env_ids] = 0.0
 
         # 初始化时也会执行 reset，因此在这里延迟创建。
         if not hasattr(self, "_getup_assist"):
