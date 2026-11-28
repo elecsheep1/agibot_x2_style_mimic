@@ -133,7 +133,8 @@ class ReplayBuffer:
             a_clean=self.a[ee[:-1], tt[:-1]],
             xi=self.xi[e, t],
             reward=self.r[ee[:-1], tt[:-1]],
-            done=self.done[ee[1:], tt[1:]],
+            # 每条转移行保存的是执行该动作后的失败标签。
+            done=self.done[ee[:-1], tt[:-1]],
             frame=self.frame[ee[:-1], tt[:-1]],
         )
 

@@ -1,0 +1,45 @@
+run_name = "x2_bounded_warmup_probe"
+num_envs = 32
+iterations = 50
+replay_capacity = 1024
+warmup_steps = 12
+log_interval = 5
+checkpoint_interval = 25
+domain_randomization = false
+reset_noise = false
+obs_noise = false
+
+[world_model]
+hidden = [128,128]
+[wm_trainer]
+batch_size = 64
+batches_per_update = 2
+compile = "none"
+[policy]
+encoder_hidden = [128,64]
+decoder_hidden = [128,64]
+[critic]
+hidden = [64,32]
+[policy_trainer]
+batch_size = 16
+critic_epochs = 2
+critic_minibatches = 2
+compile = "none"
+
+[pretraining]
+head_init = "logs/supermimic_tracking/2026-11-28_15-46-28_x2_tracking_diagnostic2000/diagnostics/failure_head_refit10000/failure_head.pt"
+collection_steps = 256
+world_update_calls = 250
+head_updates = 2000
+head_batch_size = 256
+head_lr = 0.0002
+holdout_envs_per_group = 4
+# 工程试验门槛，并非论文给出的收敛阈值。
+maximum_position_8_m = 0.05
+maximum_rotation_8_deg = 10.0
+maximum_position_32_m = 0.15
+maximum_rotation_32_deg = 30.0
+minimum_validation_positives = 3
+minimum_recall = 0.8
+maximum_false_positive_rate = 0.02
+joint_if_ready = true
