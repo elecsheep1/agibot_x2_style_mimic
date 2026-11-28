@@ -1,0 +1,17 @@
+# 与 joint_probe.toml 的唯一算法差异：冻结来自同一初始检查点的失败头。
+[probe]
+base_checkpoint = "logs/supermimic_tracking/2026-11-28_19-09-44_x2_bounded_warmup_probe/warmup_only.pt"
+dynamics_checkpoint = "logs/supermimic_tracking/2026-11-28_19-09-44_x2_bounded_warmup_probe/diagnostics/weights_baseline_s43/dynamics_best_long_rollout.pt"
+fixed_data = "logs/supermimic_tracking/2026-11-28_19-09-44_x2_bounded_warmup_probe/diagnostics/error_source_data/transitions.pt"
+updates = 500
+evaluation_interval = 100
+evaluation_seconds = 20.0
+collection_warmup = 64
+run_name = "joint_probe_wm8_actor32_frozen_head"
+freeze_failure_head = true
+
+[wm_trainer]
+compile = "none"
+
+[policy_trainer]
+compile = "default"

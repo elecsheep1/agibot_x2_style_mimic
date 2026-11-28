@@ -3,7 +3,8 @@ import copy
 from types import SimpleNamespace as NS
 import unittest
 import torch
-from joint_probe import ProbeCfg, restore_modules, evaluation_frames, evaluate_real
+from joint_probe import (ProbeCfg, restore_modules, evaluation_frames, evaluate_real,
+                         configure_failure_head, assert_head_unchanged)
 
 
 class ConstantPolicy(torch.nn.Module):
@@ -13,6 +14,23 @@ class ConstantPolicy(torch.nn.Module):
 
 
 class JointProbeTests(unittest.TestCase):
+    def test_freeze_preserves_input_gradient_and_blocks_optimizer_update(self):
+        from test_failure_supervision import wm
+        from importlib import import_module
+        frozen_parameters=import_module(wm.__package__+'.gradients').frozen_parameters
+        training=NS(world=NS(term_head=wm.TerminationHead((16,))))
+        optimizer=torch.optim.Adam(training.world.term_head.parameters(),lr=.01)
+        initial=configure_failure_head(training,True)
+        features=torch.randn(8,2,requires_grad=True)
+        with frozen_parameters(training.world.term_head):
+            loss=training.world.term_head(features).sum()
+        optimizer.zero_grad();loss.backward();optimizer.step()
+        self.assertGreater(float(features.grad.abs().sum()),0.)
+        self.assertTrue(all(p.grad is None and not p.requires_grad for p in training.world.term_head.parameters()))
+        assert_head_unchanged(training,initial)
+        with torch.no_grad():next(training.world.term_head.parameters()).add_(1.)
+        with self.assertRaises(RuntimeError):assert_head_unchanged(training,initial)
+
     def test_restore_only_parameters_and_head_from_base(self):
         training=NS(contract={'asset':'x2'},policy=torch.nn.Linear(2,1),critic=torch.nn.Linear(2,1),
                     world=torch.nn.Module())

@@ -28,12 +28,15 @@ class ProbeCfg:
     evaluation_seconds: float = 20.
     collection_warmup: int = 64
     run_name: str = 'joint_probe_wm8_actor32'
+    freeze_failure_head: bool = False
 
     def validate(self):
         if min(self.updates, self.evaluation_interval, self.collection_warmup) < 1:
             raise ValueError('联合更新次数、评估间隔和预采集步数必须为正数')
         if not math.isfinite(self.evaluation_seconds) or self.evaluation_seconds <= 0:
             raise ValueError('评估秒数必须为正有限数')
+        if not isinstance(self.freeze_failure_head,bool):
+            raise ValueError('freeze_failure_head 必须是布尔值')
 
 
 def restore_modules(training, base, dynamics):
@@ -66,6 +69,18 @@ def evaluation_frames(library, count, seed):
                                  generator=torch.Generator().manual_seed(seed))
     frames = torch.cat((starts, random_frames)).to(library.starts.device)
     return torch.minimum(frames, library.last_frame_of(frames)-2)
+
+
+def configure_failure_head(training, freeze):
+    """只冻结参数，不切断失败概率对想象状态的梯度。"""
+    training.world.term_head.requires_grad_(not freeze)
+    return {key:value.detach().cpu().clone() for key,value in training.world.term_head.state_dict().items()}
+
+
+def assert_head_unchanged(training, initial):
+    if not all(torch.equal(value,training.world.term_head.state_dict()[key].detach().cpu())
+               for key,value in initial.items()):
+        raise RuntimeError('冻结对照中失败头参数发生变化')
 
 
 @torch.no_grad()
@@ -126,12 +141,13 @@ def run_probe(training, probe, data):
     from x2_style_mimic.algorithms.supermimic_tracking.rotations import quat_box_minus
     from x2_style_mimic.algorithms.supermimic_tracking.training import validate_fk
     env = training.env
+    initial_head = configure_failure_head(training,probe.freeze_failure_head)
     groups, _ = split_data(data, training.cfg.seed)
     validate_data(data)
     cohort = {k: v.to(env.device) if isinstance(v, torch.Tensor) else v
               for k,v in sample_cohort(groups['validation'],128,training.cfg.seed).items()}
     frames = evaluation_frames(training.lib, env.num_envs, 42)
-    report = dict(evaluation_frames=frames.tolist(),evaluations=[],notes=[
+    report = dict(evaluation_frames=frames.tolist(),evaluations=[],freeze_failure_head=probe.freeze_failure_head,notes=[
         '固定真实评估仅统计每环境首回合；首帧与均匀参考帧各半，不等同纯首帧验收。',
         '真实评估不入回放库；评估后显式切断回合并重新采集。',
         '固定旧数据用于模型回归检查，不代表新策略分布的留出集。',
@@ -139,6 +155,8 @@ def run_probe(training, probe, data):
         '按完整联合更新次数停止，不按向量环境步停止。'])
     ids = torch.arange(env.num_envs, device=env.device)
     def checkpoint_evaluation():
+        if probe.freeze_failure_head:
+            assert_head_unchanged(training,initial_head)
         training.buffer.end_episode(ids)
         real = evaluate_real(training,frames,probe.evaluation_seconds)
         with torch.no_grad():
@@ -150,7 +168,8 @@ def run_probe(training, probe, data):
             if mask.any():
                 batch = training.buffer.sample_windows(128,32)
                 online = training.world.rollout_error(batch.states,batch.a_exec,batch.xi).tolist()
-        record = dict(update=training.num_updates,real=real,fixed_world=fixed,replay_world_nse=online)
+        record = dict(update=training.num_updates,real=real,fixed_world=fixed,replay_world_nse=online,
+                      frozen_head_unchanged=True if probe.freeze_failure_head else None)
         report['evaluations'].append(record)
         (training.output/'probe_report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2))
         for key,value in real.items():
